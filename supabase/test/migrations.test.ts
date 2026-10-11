@@ -115,6 +115,43 @@ describe('row level security', () => {
   })
 })
 
+describe('authorship', () => {
+  it('ignores a forged recorded_by and created_at on insert', async () => {
+    const id = '50000000-0000-4000-8000-000000000002'
+    await as(ids.kaderA, () =>
+      db.query(
+        `insert into measurements (id, child_id, measured_at, recorded_by, created_at)
+         values ($1, $2, '2026-10-02', $3, '2000-01-01')`,
+        [id, ids.childA, ids.bidan1],
+      ),
+    )
+    const row = (await db.query<{ recorded_by: string; created_at: Date }>(
+      'select recorded_by, created_at from measurements where id = $1',
+      [id],
+    )).rows[0]
+    expect(row?.recorded_by).toBe(ids.kaderA)
+    expect(row!.created_at.getFullYear()).toBeGreaterThan(2000)
+  })
+
+  it('keeps the original author when another user edits', async () => {
+    const id = '40000000-0000-4000-8000-0000000000a2'
+    await as(ids.kaderA, () =>
+      db.query(
+        `insert into children (id, posyandu_id, full_name, sex, birth_date) values ($1, $2, 'Anak A2', 'male', '2025-02-01')`,
+        [id, ids.posA],
+      ),
+    )
+    await as(ids.bidan1, () =>
+      db.query(`update children set full_name = 'Anak A2 edit', created_by = $2 where id = $1`, [id, ids.bidan1]),
+    )
+    const row = (await db.query<{ created_by: string; full_name: string }>(
+      'select created_by, full_name from children where id = $1',
+      [id],
+    )).rows[0]
+    expect(row).toEqual({ created_by: ids.kaderA, full_name: 'Anak A2 edit' })
+  })
+})
+
 describe('updated_at', () => {
   it('ignores the client value and uses the server clock', async () => {
     await db.query(`update children set full_name = 'Anak A', updated_at = '2000-01-01' where id = $1`, [ids.childA])

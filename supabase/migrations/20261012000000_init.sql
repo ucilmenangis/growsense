@@ -35,7 +35,7 @@ create table public.children (
   mother_name text,
   birth_weight_kg numeric(4, 2) check (birth_weight_kg between 0.3 and 7),
   consent_at timestamptz,
-  created_by uuid default auth.uid() references auth.users (id),
+  created_by uuid references auth.users (id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
@@ -54,7 +54,7 @@ create table public.measurements (
   whz numeric(5, 2),
   flags text[] not null default '{}',
   note text,
-  recorded_by uuid default auth.uid() references auth.users (id),
+  recorded_by uuid references auth.users (id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
@@ -65,22 +65,34 @@ create index children_updated_idx on public.children (updated_at);
 create index measurements_child_idx on public.measurements (child_id, measured_at);
 create index measurements_updated_idx on public.measurements (updated_at);
 
--- The server clock decides updated_at, whatever the client sends.
-create function public.touch_updated_at() returns trigger
+-- The server decides timestamps and authorship, whatever the client sends.
+create function public.stamp_row() returns trigger
 language plpgsql as $$
 begin
   new.updated_at := now();
-  if tg_op = 'UPDATE' then
+  if tg_op = 'INSERT' then
+    new.created_at := now();
+    if tg_table_name = 'children' then
+      new.created_by := auth.uid();
+    else
+      new.recorded_by := auth.uid();
+    end if;
+  else
     new.created_at := old.created_at;
+    if tg_table_name = 'children' then
+      new.created_by := old.created_by;
+    else
+      new.recorded_by := old.recorded_by;
+    end if;
   end if;
   return new;
 end
 $$;
 
-create trigger children_touch before insert or update on public.children
-  for each row execute function public.touch_updated_at();
-create trigger measurements_touch before insert or update on public.measurements
-  for each row execute function public.touch_updated_at();
+create trigger children_stamp before insert or update on public.children
+  for each row execute function public.stamp_row();
+create trigger measurements_stamp before insert or update on public.measurements
+  for each row execute function public.stamp_row();
 
 -- Kader: own posyandu. Bidan and admin: every posyandu under their puskesmas.
 create function public.can_access_posyandu(target uuid) returns boolean
