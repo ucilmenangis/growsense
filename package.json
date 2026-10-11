@@ -2,7 +2,11 @@
   "name": "growsense",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "supabase"
+  ],
   "scripts": {
     "dev:pwa": "npm run dev -w @growsense/pwa",
     "dev:web": "npm run dev -w @growsense/web",
