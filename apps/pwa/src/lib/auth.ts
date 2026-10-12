@@ -1,4 +1,6 @@
-// Kader login. The first login needs internet (Supabase); after that the PIN unlocks the app offline.
+// Kader login. The first sign-in on a phone uses the account password from the bidan and needs
+// internet. The kader then sets a 6 digit PIN that stays on this phone and unlocks the app offline.
+// The PIN is never sent to the server, so guessing it from a stolen phone does not open the account.
 // Without Supabase settings the app runs in demo mode with a local account.
 import type { GrowSenseDb } from '../data/db'
 import { supabase } from '../data/supabase'
@@ -20,6 +22,8 @@ interface PinRecord {
 }
 
 export const DEMO_POSYANDU_ID = '00000000-0000-4000-8000-0000000000d1'
+/** Wrong PINs allowed before the password is required again. */
+export const MAX_PIN_ATTEMPTS = 5
 
 export class LoginError extends Error {}
 
@@ -41,13 +45,9 @@ async function derive(pin: string, salt: Uint8Array<ArrayBuffer>): Promise<strin
   return toB64(bits)
 }
 
-export async function hashPin(pin: string): Promise<PinRecord> {
+async function hashPin(pin: string): Promise<PinRecord> {
   const salt = crypto.getRandomValues(new Uint8Array(16))
   return { salt: toB64(salt), hash: await derive(pin, salt) }
-}
-
-export async function verifyPin(pin: string, record: PinRecord): Promise<boolean> {
-  return (await derive(pin, fromB64(record.salt))) === record.hash
 }
 
 async function readMeta<T>(db: GrowSenseDb, key: string): Promise<T | null> {
@@ -59,6 +59,11 @@ const writeMeta = (db: GrowSenseDb, key: string, value: unknown) => db.meta.put(
 
 export const storedSession = (db: GrowSenseDb) => readMeta<Session>(db, 'session')
 
+/** True when this phone has a signed in account with a PIN, so the PIN screen applies. */
+export async function hasPin(db: GrowSenseDb): Promise<boolean> {
+  return !!(await storedSession(db)) && !!(await db.meta.get('pin'))
+}
+
 export async function pendingCount(db: GrowSenseDb): Promise<number> {
   const [children, measurements] = await Promise.all([
     db.children.where('dirty').equals(1).count(),
@@ -67,13 +72,10 @@ export async function pendingCount(db: GrowSenseDb): Promise<number> {
   return children + measurements
 }
 
-/** Removes the previous account's local data. Refuses while it still has unsent changes. */
+const UNSENT_MESSAGE =
+  'Masih ada data akun sebelumnya yang belum terkirim. Masuk dengan akun itu dan kirim datanya dulu.'
+
 async function clearLocal(db: GrowSenseDb) {
-  if (await pendingCount(db)) {
-    throw new LoginError(
-      'Masih ada data akun sebelumnya yang belum terkirim. Masuk dengan akun itu dan sinkronkan dulu.',
-    )
-  }
   await db.transaction('rw', db.children, db.measurements, db.meta, async () => {
     await db.children.clear()
     await db.measurements.clear()
@@ -81,10 +83,29 @@ async function clearLocal(db: GrowSenseDb) {
   })
 }
 
-async function onlineSession(phone: string, pin: string): Promise<Session> {
-  if (!navigator.onLine) throw new LoginError('Masuk pertama kali di HP ini perlu internet')
-  const { data, error } = await supabase!.auth.signInWithPassword({ email: kaderEmail(phone), password: pin })
-  if (error || !data.user) throw new LoginError('Nomor HP atau PIN salah')
+/** Unlocks with the PIN, offline. Too many wrong PINs remove it and the password is needed again. */
+export async function unlock(db: GrowSenseDb, pin: string): Promise<Session> {
+  const session = await storedSession(db)
+  const record = await readMeta<PinRecord>(db, 'pin')
+  if (!session || !record) throw new LoginError('Masuk dengan kata sandi dulu')
+
+  if ((await derive(pin, fromB64(record.salt))) === record.hash) {
+    await db.meta.delete('pinFails')
+    return session
+  }
+  const fails = ((await readMeta<number>(db, 'pinFails')) ?? 0) + 1
+  if (fails >= MAX_PIN_ATTEMPTS) {
+    await db.meta.bulkDelete(['pin', 'pinFails'])
+    throw new LoginError(`PIN salah ${MAX_PIN_ATTEMPTS} kali. Masuk lagi dengan nomor HP dan kata sandi.`)
+  }
+  await writeMeta(db, 'pinFails', fails)
+  throw new LoginError(`PIN salah. Sisa ${MAX_PIN_ATTEMPTS - fails} kali percobaan.`)
+}
+
+async function onlineSession(phone: string, password: string): Promise<Session> {
+  if (!navigator.onLine) throw new LoginError('Masuk dengan kata sandi perlu internet')
+  const { data, error } = await supabase!.auth.signInWithPassword({ email: kaderEmail(phone), password })
+  if (error || !data.user) throw new LoginError('Nomor HP atau kata sandi salah')
 
   const { data: profile } = await supabase!
     .from('profiles')
@@ -126,27 +147,54 @@ function demoSession(phone: string): Session {
   }
 }
 
-export async function login(db: GrowSenseDb, phoneInput: string, pin: string): Promise<Session> {
-  if (!/^\d{6}$/.test(pin)) throw new LoginError('PIN harus 6 angka')
+/**
+ * Signs in with phone and password. Returns the session for `setPin`; nothing is stored yet.
+ * Switching to another account is refused before contacting the server while the previous
+ * account still has unsent changes, so the server session never belongs to someone else.
+ */
+export async function signIn(db: GrowSenseDb, phoneInput: string, password: string): Promise<Session> {
   const phone = normalizePhone(phoneInput)
   if (phone.length < 10) throw new LoginError('Nomor HP belum lengkap')
+  if (!password) throw new LoginError('Isi kata sandi')
 
   const saved = await storedSession(db)
-  const pinRecord = await readMeta<PinRecord>(db, 'pin')
-  if (saved?.phone === phone && pinRecord) {
-    if (await verifyPin(pin, pinRecord)) return saved
-    if (!supabase || !navigator.onLine) throw new LoginError('PIN salah')
-  }
+  if (saved && saved.phone !== phone && (await pendingCount(db))) throw new LoginError(UNSENT_MESSAGE)
 
-  const session = supabase ? await onlineSession(phone, pin) : demoSession(phone)
-  if (saved && saved.userId !== session.userId) await clearLocal(db)
+  const session = supabase ? await onlineSession(phone, password) : demoSession(phone)
+  if (saved && saved.userId !== session.userId) {
+    if (await pendingCount(db)) {
+      await supabase?.auth.signOut()
+      throw new LoginError(UNSENT_MESSAGE)
+    }
+    await clearLocal(db)
+  }
+  return session
+}
+
+/** Stores the session and the PIN that unlocks it on this phone. */
+export async function setPin(db: GrowSenseDb, session: Session, pin: string): Promise<void> {
+  if (!/^\d{6}$/.test(pin)) throw new LoginError('PIN harus 6 angka')
+  if (/^(\d)\1{5}$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) {
+    throw new LoginError('PIN terlalu mudah ditebak. Hindari angka sama atau berurutan.')
+  }
   await writeMeta(db, 'session', session)
   await writeMeta(db, 'pin', await hashPin(pin))
-  return session
+  await db.meta.delete('pinFails')
+}
+
+/**
+ * The Supabase session must belong to the unlocked kader before any data is sent.
+ * Returns false when it is missing or belongs to another user.
+ */
+export async function serverSessionMatches(session: Session): Promise<boolean> {
+  if (!supabase) return false
+  const { data } = await supabase.auth.getSession()
+  return data.session?.user.id === session.userId
 }
 
 /** Signs out and wipes this phone's copy of the data. Refuses while changes are unsent. */
 export async function logout(db: GrowSenseDb): Promise<void> {
+  if (await pendingCount(db)) throw new LoginError('Masih ada data yang belum terkirim. Kirim dulu sebelum keluar.')
   await clearLocal(db)
   await supabase?.auth.signOut()
 }

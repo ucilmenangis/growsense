@@ -39,7 +39,7 @@ Batas toleransi tinggi turun (`HEIGHT_DROP_TOLERANCE_CM`) masih nilai awal dan p
 
 | Rute | Layar | Desain Stitch |
 |---|---|---|
-| (terkunci) | Masuk dengan nomor HP dan PIN 6 angka | m07 |
+| (terkunci) | Masuk dengan nomor HP dan kata sandi, lalu buat PIN; berikutnya cukup PIN | m07 |
 | `/` | Beranda: progres timbang bulan ini, status kirim data | m01 |
 | `/balita`, `/timbang` | Cari dan saring balita | m02 |
 | `/balita/baru` | Daftar balita baru, wajib persetujuan orang tua | baru |
@@ -49,9 +49,11 @@ Batas toleransi tinggi turun (`HEIGHT_DROP_TOLERANCE_CM`) masih nilai awal dan p
 | `/notifikasi` | Pemberitahuan dari data di HP | m05 |
 | `/profil` | Profil, rekap CSV bulanan, kunci, keluar | m06 |
 
-Aplikasi selalu terkunci saat dibuka. Masuk pertama kali di HP perlu internet; setelah itu PIN membuka aplikasi tanpa sinyal (PIN disimpan sebagai hash PBKDF2).
+Aplikasi selalu terkunci saat dibuka. Masuk pertama kali di sebuah HP memakai nomor HP dan kata sandi dari bidan, dan perlu internet. Setelah itu kader membuat PIN 6 angka yang hanya tersimpan di HP (hash PBKDF2) dan tidak pernah dikirim ke server, jadi menebak PIN dari HP curian tidak membuka akun server. Salah PIN 5 kali menghapus PIN dan meminta kata sandi lagi; data di HP tetap ada. Sinkron hanya jalan kalau sesi Supabase milik kader yang sedang membuka aplikasi.
 
-Tanpa `.env.local` aplikasi berjalan dalam **mode demo**: nomor HP dan PIN apa saja diterima, data hanya di HP, dan tombol "Isi data contoh" di Beranda membuat 8 balita dengan riwayat timbang. Nilai contoh diletakkan pada jalur z-score WHO, jadi status dan peringatannya adalah hasil hitungan core yang sebenarnya.
+Batasan yang perlu diketahui: data balita di IndexedDB belum dienkripsi di HP. Siapa pun yang bisa membuka profil browser HP itu bisa membaca datanya. Kalau laporan menyebut data terenkripsi, itu berlaku untuk server (Supabase) dan koneksi (HTTPS), belum untuk HP.
+
+Tanpa `.env.local` aplikasi berjalan dalam **mode demo**: nomor HP dan kata sandi apa saja diterima, data hanya di HP, dan tombol "Isi data contoh" di Beranda membuat 8 balita dengan riwayat timbang. Nilai contoh diletakkan pada jalur z-score WHO, jadi status dan peringatannya adalah hasil hitungan core yang sebenarnya.
 
 Peringatan dini saat ini memakai aturan sementara di `packages/core/src/warning.ts` (penurunan z-score TB/U dalam 3 bulan terakhir). Ambang batasnya perlu disepakati dengan bidan dan nanti diganti model AI.
 
@@ -68,6 +70,6 @@ Font Poppins dan icon (lucide) ikut di-bundle, jadi tampilan tetap utuh saat off
 
 1. Buat project di supabase.com.
 2. Jalankan `supabase/migrations/*.sql` lalu `supabase/seed.sql` di SQL Editor (atau `supabase link` lalu `supabase db push` kalau memakai CLI).
-3. Buat user kader dan bidan di menu Authentication, lalu isi tabel `profiles` (contoh ada di `seed.sql`). Akun kader memakai email `62<nomor HP tanpa 0>@kader.growsense.id` dan password = PIN 6 angka, misalnya `6281234567890@kader.growsense.id`.
+3. Buat user kader dan bidan di menu Authentication, lalu isi tabel `profiles` (contoh ada di `seed.sql`). Akun kader memakai email `62<nomor HP tanpa 0>@kader.growsense.id` dan kata sandi minimal 8 karakter yang diberikan bidan ke kader, misalnya `6281234567890@kader.growsense.id`. Kata sandi ini berbeda dari PIN.
 
 Aturan akses: kader hanya melihat Posyandu sendiri, bidan melihat semua Posyandu di Puskesmasnya. Data tidak dihapus permanen, cukup isi `deleted_at`. `npm test -w @growsense/db` menjalankan migrasi di PGlite dan menguji aturan ini.

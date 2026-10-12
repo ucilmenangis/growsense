@@ -1,41 +1,113 @@
-// m07: login with phone number and 6 digit PIN. A returning kader only types the PIN.
+// m07: unlock with the PIN, or sign in with phone and password and then set a PIN for this phone.
 import { useEffect, useState, type FormEvent } from 'react'
 import { Eye, EyeOff, LifeBuoy, WifiOff } from 'lucide-react'
 import { Button, Field, inputClass } from '../components/ui'
 import { db } from '../data/instance'
 import { supabase } from '../data/supabase'
-import { login, LoginError, storedSession, type Session } from '../lib/auth'
+import { hasPin, LoginError, setPin, signIn, storedSession, unlock, type Session } from '../lib/auth'
+
+type Mode = 'pin' | 'password' | 'newPin'
+
+function PinInput({
+  label,
+  value,
+  onChange,
+  autoFocus,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  autoFocus?: boolean
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <Field label={label}>
+      <div className="relative">
+        <input
+          className={`${inputClass} pr-12 tracking-[0.4em]`}
+          type={show ? 'text' : 'password'}
+          inputMode="numeric"
+          autoComplete="off"
+          pattern="[0-9]{6}"
+          maxLength={6}
+          placeholder="••••••"
+          value={value}
+          onChange={(e) => onChange(e.target.value.replace(/\D/g, ''))}
+          autoFocus={autoFocus}
+          required
+        />
+        <button
+          type="button"
+          aria-label={show ? 'Sembunyikan PIN' : 'Tampilkan PIN'}
+          onClick={() => setShow((v) => !v)}
+          className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-on-surface-variant"
+        >
+          {show ? <EyeOff size={20} /> : <Eye size={20} />}
+        </button>
+      </div>
+    </Field>
+  )
+}
 
 export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [saved, setSaved] = useState<Session | null | undefined>(undefined)
-  const [switching, setSwitching] = useState(false)
+  const [mode, setMode] = useState<Mode>()
+  const [saved, setSaved] = useState<Session | null>(null)
+  const [pending, setPending] = useState<Session | null>(null)
   const [phone, setPhone] = useState('')
-  const [pin, setPin] = useState('')
-  const [showPin, setShowPin] = useState(false)
+  const [password, setPassword] = useState('')
+  const [pin, setPinValue] = useState('')
+  const [pin2, setPin2] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    void storedSession(db).then(setSaved)
+    void (async () => {
+      const s = await storedSession(db)
+      setSaved(s)
+      if (s) setPhone(s.phone.replace(/^62/, '0'))
+      setMode((await hasPin(db)) ? 'pin' : 'password')
+    })()
   }, [])
 
-  const returning = saved && !switching
-
-  async function submit(e: FormEvent) {
-    e.preventDefault()
+  async function run(action: () => Promise<void>) {
     setError('')
     setBusy(true)
     try {
-      onLogin(await login(db, returning ? saved.phone : phone, pin))
+      await action()
     } catch (err) {
       setError(err instanceof LoginError ? err.message : 'Gagal masuk. Coba lagi.')
-      setPin('')
     } finally {
       setBusy(false)
     }
   }
 
-  if (saved === undefined) return null
+  function submit(e: FormEvent) {
+    e.preventDefault()
+    if (mode === 'pin') {
+      void run(async () => {
+        try {
+          onLogin(await unlock(db, pin))
+        } finally {
+          setPinValue('')
+          if (!(await hasPin(db))) setMode('password')
+        }
+      })
+    } else if (mode === 'password') {
+      void run(async () => {
+        setPending(await signIn(db, phone, password))
+        setPassword('')
+        setMode('newPin')
+      })
+    } else {
+      void run(async () => {
+        if (pin !== pin2) throw new LoginError('Kedua PIN tidak sama')
+        await setPin(db, pending!, pin)
+        onLogin(pending!)
+      })
+    }
+  }
+
+  if (!mode) return null
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-md flex-col px-6 pt-safe">
@@ -46,52 +118,56 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
       </div>
 
       <form onSubmit={submit} className="mt-10 space-y-5">
-        {returning ? (
-          <div className="rounded-xl bg-surface-low p-4">
-            <p className="text-xs text-on-surface-variant">Masuk sebagai</p>
-            <p className="font-semibold">{saved.fullName}</p>
-            <p className="text-sm text-on-surface-variant">{saved.posyanduName}</p>
-          </div>
-        ) : (
-          <Field label="Nomor HP (WhatsApp)">
-            <input
-              className={inputClass}
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              placeholder="0812 3456 7890"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required
-            />
-          </Field>
+        {mode === 'pin' && saved && (
+          <>
+            <div className="rounded-xl bg-surface-low p-4">
+              <p className="text-xs text-on-surface-variant">Masuk sebagai</p>
+              <p className="font-semibold">{saved.fullName}</p>
+              <p className="text-sm text-on-surface-variant">{saved.posyanduName}</p>
+            </div>
+            <PinInput label="PIN (6 angka)" value={pin} onChange={setPinValue} autoFocus />
+          </>
         )}
 
-        <Field label="PIN (6 angka)">
-          <div className="relative">
-            <input
-              className={`${inputClass} pr-12 tracking-[0.4em]`}
-              type={showPin ? 'text' : 'password'}
-              inputMode="numeric"
-              autoComplete="current-password"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              placeholder="••••••"
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-              autoFocus={!!returning}
-              required
-            />
-            <button
-              type="button"
-              aria-label={showPin ? 'Sembunyikan PIN' : 'Tampilkan PIN'}
-              onClick={() => setShowPin((v) => !v)}
-              className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-on-surface-variant"
-            >
-              {showPin ? <EyeOff size={20} /> : <Eye size={20} />}
-            </button>
-          </div>
-        </Field>
+        {mode === 'password' && (
+          <>
+            <Field label="Nomor HP (WhatsApp)">
+              <input
+                className={inputClass}
+                type="tel"
+                inputMode="tel"
+                autoComplete="username"
+                placeholder="0812 3456 7890"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Kata sandi" hint="Dari bidan desa saat akun dibuat.">
+              <input
+                className={inputClass}
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </Field>
+          </>
+        )}
+
+        {mode === 'newPin' && pending && (
+          <>
+            <div className="rounded-xl bg-surface-low p-4 text-sm">
+              <p className="font-semibold">Halo, {pending.fullName}</p>
+              <p className="text-on-surface-variant">
+                Buat PIN 6 angka untuk membuka aplikasi di HP ini. PIN hanya tersimpan di HP ini.
+              </p>
+            </div>
+            <PinInput label="PIN baru" value={pin} onChange={setPinValue} autoFocus />
+            <PinInput label="Ulangi PIN" value={pin2} onChange={setPin2} />
+          </>
+        )}
 
         {error && (
           <p role="alert" className="rounded-xl bg-danger-container px-4 py-3 text-sm text-danger">
@@ -99,35 +175,42 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
           </p>
         )}
 
-        <Button type="submit" disabled={busy || pin.length !== 6}>
-          {busy ? 'Memeriksa...' : 'Masuk'}
+        <Button
+          type="submit"
+          disabled={
+            busy ||
+            (mode === 'pin' && pin.length !== 6) ||
+            (mode === 'newPin' && (pin.length !== 6 || pin2.length !== 6))
+          }
+        >
+          {busy ? 'Memeriksa...' : mode === 'newPin' ? 'Simpan PIN' : 'Masuk'}
         </Button>
 
-        {returning && (
+        {mode === 'pin' && (
           <button
             type="button"
-            onClick={() => setSwitching(true)}
+            onClick={() => setMode('password')}
             className="w-full py-2 text-sm font-semibold text-primary"
           >
-            Masuk dengan akun lain
+            Lupa PIN atau masuk dengan akun lain
           </button>
         )}
       </form>
 
       <div className="mt-auto space-y-3 py-8 text-sm text-on-surface-variant">
-        {returning && (
+        {mode === 'pin' && (
           <p className="flex items-start gap-2">
             <WifiOff size={16} className="mt-0.5 shrink-0" />
-            Bisa masuk tanpa sinyal dengan PIN yang sama.
+            Bisa masuk tanpa sinyal dengan PIN.
           </p>
         )}
         <p className="flex items-start gap-2">
           <LifeBuoy size={16} className="mt-0.5 shrink-0" />
-          Lupa PIN atau belum punya akun? Hubungi bidan desa.
+          Lupa kata sandi atau belum punya akun? Hubungi bidan desa.
         </p>
         {!supabase && (
           <p className="rounded-xl bg-warn-container px-4 py-3 text-warn">
-            Mode demo: belum terhubung ke server. Isi nomor HP dan PIN apa saja untuk mencoba.
+            Mode demo: belum terhubung ke server. Isi nomor HP dan kata sandi apa saja untuk mencoba.
           </p>
         )}
       </div>

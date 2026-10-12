@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../data/instance'
 import { supabase, supabaseRemote } from '../data/supabase'
 import { sync } from '../data/sync'
-import type { Session } from './auth'
+import { serverSessionMatches, type Session } from './auth'
 
 export type SyncStatus = 'idle' | 'syncing' | 'offline' | 'error' | 'demo'
 
@@ -55,6 +55,10 @@ export function AppStateProvider({
     busy.current = true
     setStatus('syncing')
     try {
+      // Never send one kader's records with another account's server session.
+      if (!(await serverSessionMatches(session))) {
+        throw new Error('Sesi server berakhir. Kunci aplikasi lalu masuk lagi dengan kata sandi saat ada internet.')
+      }
       await sync(db, remote)
       await db.meta.put({ key: 'lastSyncAt', value: new Date().toISOString() })
       setStatus('idle')
@@ -65,7 +69,7 @@ export function AppStateProvider({
     } finally {
       busy.current = false
     }
-  }, [session.demo])
+  }, [session])
 
   useEffect(() => {
     void syncNow()

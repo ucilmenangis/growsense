@@ -22,9 +22,16 @@ const HEADER = [
   'Status BB/TB',
 ]
 
-const cell = (v: string | number | null | undefined) => {
-  const s = v == null ? '' : String(v)
-  return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+const NUMBER = /^-?\d+(\.\d+)?$/
+
+/**
+ * Text starting with = + - @ or a control character runs as a formula in spreadsheet apps.
+ * Such cells get a leading apostrophe; plain numbers such as -1.25 are left alone.
+ */
+export function cell(v: string | number | null | undefined): string {
+  let s = v == null ? '' : String(v)
+  if (/^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
+  return /[",\n\r;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /** Rows for measurements taken in `month` (YYYY-MM). */
