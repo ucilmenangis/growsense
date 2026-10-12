@@ -47,7 +47,9 @@ const childNames = async () =>
 beforeAll(async () => {
   db = new PGlite()
   await db.exec(AUTH_STUB)
-  for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+  for (const file of readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()) {
     await db.exec(readFileSync(join(dir, file), 'utf8'))
   }
   await db.exec(`
@@ -91,10 +93,9 @@ describe('row level security', () => {
   it('kader cannot record a measurement for a child outside their posyandu', async () => {
     await expect(
       as(ids.kaderA, () =>
-        db.query(
-          `insert into measurements (id, child_id, measured_at) values (gen_random_uuid(), $1, '2026-10-01')`,
-          [ids.childC],
-        ),
+        db.query(`insert into measurements (id, child_id, measured_at) values (gen_random_uuid(), $1, '2026-10-01')`, [
+          ids.childC,
+        ]),
       ),
     ).rejects.toThrow(/row-level security/)
   })
@@ -106,10 +107,12 @@ describe('row level security', () => {
       on conflict (id) do update set weight_kg = excluded.weight_kg`
     await as(ids.kaderA, () => db.query(upsert, [id, ids.childA, 9.1]))
     await as(ids.kaderA, () => db.query(upsert, [id, ids.childA, 9.2]))
-    const row = (await db.query<{ weight_kg: string; recorded_by: string }>(
-      'select weight_kg, recorded_by from measurements where id = $1',
-      [id],
-    )).rows[0]
+    const row = (
+      await db.query<{ weight_kg: string; recorded_by: string }>(
+        'select weight_kg, recorded_by from measurements where id = $1',
+        [id],
+      )
+    ).rows[0]
     expect(Number(row?.weight_kg)).toBe(9.2)
     expect(row?.recorded_by).toBe(ids.kaderA)
   })
@@ -125,10 +128,12 @@ describe('authorship', () => {
         [id, ids.childA, ids.bidan1],
       ),
     )
-    const row = (await db.query<{ recorded_by: string; created_at: Date }>(
-      'select recorded_by, created_at from measurements where id = $1',
-      [id],
-    )).rows[0]
+    const row = (
+      await db.query<{ recorded_by: string; created_at: Date }>(
+        'select recorded_by, created_at from measurements where id = $1',
+        [id],
+      )
+    ).rows[0]
     expect(row?.recorded_by).toBe(ids.kaderA)
     expect(row!.created_at.getFullYear()).toBeGreaterThan(2000)
   })
@@ -144,10 +149,12 @@ describe('authorship', () => {
     await as(ids.bidan1, () =>
       db.query(`update children set full_name = 'Anak A2 edit', created_by = $2 where id = $1`, [id, ids.bidan1]),
     )
-    const row = (await db.query<{ created_by: string; full_name: string }>(
-      'select created_by, full_name from children where id = $1',
-      [id],
-    )).rows[0]
+    const row = (
+      await db.query<{ created_by: string; full_name: string }>(
+        'select created_by, full_name from children where id = $1',
+        [id],
+      )
+    ).rows[0]
     expect(row).toEqual({ created_by: ids.kaderA, full_name: 'Anak A2 edit' })
   })
 })
@@ -163,8 +170,8 @@ describe('updated_at', () => {
 
 describe('constraints', () => {
   it('rejects a malformed NIK', async () => {
-    await expect(
-      db.query(`update children set nik = '12345' where id = $1`, [ids.childA]),
-    ).rejects.toThrow(/check constraint/)
+    await expect(db.query(`update children set nik = '12345' where id = $1`, [ids.childA])).rejects.toThrow(
+      /check constraint/,
+    )
   })
 })

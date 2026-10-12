@@ -1,0 +1,71 @@
+@import 'tailwindcss';
+
+@font-face {
+  font-family: 'Poppins';
+  font-weight: 400;
+  font-display: swap;
+  src: url('@fontsource/poppins/files/poppins-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-weight: 500;
+  font-display: swap;
+  src: url('@fontsource/poppins/files/poppins-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-weight: 600;
+  font-display: swap;
+  src: url('@fontsource/poppins/files/poppins-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Poppins';
+  font-weight: 700;
+  font-display: swap;
+  src: url('@fontsource/poppins/files/poppins-latin-700-normal.woff2') format('woff2');
+}
+
+/* Tokens taken from the Stitch design. */
+@theme {
+  --font-sans: 'Poppins', ui-sans-serif, system-ui, sans-serif;
+
+  --color-primary: #006194;
+  --color-primary-container: #007bb9;
+  --color-on-primary: #ffffff;
+  --color-secondary-container: #7bc2ff;
+  --color-surface: #faf8ff;
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #f2f3ff;
+  --color-surface-container: #eaedff;
+  --color-surface-high: #e2e7ff;
+  --color-surface-highest: #dae2fd;
+  --color-on-surface: #131b2e;
+  --color-on-surface-variant: #3f4850;
+  --color-outline: #707881;
+  --color-outline-variant: #bfc7d2;
+
+  --color-danger: #ba1a1a;
+  --color-danger-container: #ffdad6;
+  --color-warn: #7a4a00;
+  --color-warn-container: #ffe2b8;
+  --color-ok: #1b6b3a;
+  --color-ok-container: #d4f4dd;
+
+  --shadow-card: 0 4px 20px -2px rgb(2 132 199 / 0.06);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}

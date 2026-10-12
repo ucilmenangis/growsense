@@ -64,7 +64,10 @@ export async function updateChild(db: GrowSenseDb, id: string, changes: ChildCha
   })
 }
 
-function toAssessment(child: ChildRow, m: Pick<MeasurementRow, 'measured_at' | 'weight_kg' | 'height_cm' | 'position'>) {
+function toAssessment(
+  child: ChildRow,
+  m: Pick<MeasurementRow, 'measured_at' | 'weight_kg' | 'height_cm' | 'position'>,
+) {
   return assess({
     sex: child.sex,
     birthDate: child.birth_date,

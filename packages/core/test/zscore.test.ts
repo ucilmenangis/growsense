@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  adjustHeightForPosition,
-  ageInDays,
-  zHeightForAge,
-  zWeightForAge,
-  zWeightForHeight,
-} from '../src/zscore'
+import { adjustHeightForPosition, ageInDays, zHeightForAge, zWeightForAge, zWeightForHeight } from '../src/zscore'
 
 // Measurement value at a given z for one LMS row (inverse of the LMS formula).
 const atZ = (z: number, l: number, m: number, s: number) => m * (1 + l * s * z) ** (1 / l)

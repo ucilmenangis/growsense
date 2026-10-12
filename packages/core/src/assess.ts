@@ -39,7 +39,10 @@ export function assess(input: MeasurementInput): Assessment {
   const height = heightCm === undefined ? null : adjustHeightForPosition(heightCm, ageDays, position)
 
   const heightForAge = indicator(height === null ? null : zHeightForAge(sex, ageDays, height), classifyHeightForAge)
-  const weightForAge = indicator(weightKg === undefined ? null : zWeightForAge(sex, ageDays, weightKg), classifyWeightForAge)
+  const weightForAge = indicator(
+    weightKg === undefined ? null : zWeightForAge(sex, ageDays, weightKg),
+    classifyWeightForAge,
+  )
   const weightForHeight = indicator(
     height === null || weightKg === undefined ? null : zWeightForHeight(sex, ageDays, height, weightKg),
     classifyWeightForHeight,

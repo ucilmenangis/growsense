@@ -22,6 +22,8 @@ npm run typecheck
 npm run build
 ```
 
+`npm run format` merapikan kode dengan Prettier.
+
 Service worker hanya aktif di hasil build. Untuk mencoba mode offline: `npm run build -w @growsense/pwa`, lalu `npx vite preview` di `apps/pwa`.
 
 ## packages/core
@@ -32,6 +34,28 @@ Service worker hanya aktif di hasil build. Untuk mencoba mode offline: `npm run 
 - Metode z-score mengikuti WHO anthro, termasuk restricted z-score untuk indikator berbasis berat di luar 3 SD.
 
 Batas toleransi tinggi turun (`HEIGHT_DROP_TOLERANCE_CM`) masih nilai awal dan perlu dikonfirmasi ke bidan.
+
+## Layar PWA kader
+
+| Rute | Layar | Desain Stitch |
+|---|---|---|
+| (terkunci) | Masuk dengan nomor HP dan PIN 6 angka | m07 |
+| `/` | Beranda: progres timbang bulan ini, status kirim data | m01 |
+| `/balita`, `/timbang` | Cari dan saring balita | m02 |
+| `/balita/baru` | Daftar balita baru, wajib persetujuan orang tua | baru |
+| `/balita/:id/timbang` | Form timbang 3 langkah, status dihitung langsung | m03 |
+| `/balita/:id` | Status gizi, peringatan dini, kurva WHO, saran untuk ibu | m04 |
+| `/pantauan` | Balita perlu dipantau, urut paling mendesak | m04 (tab) |
+| `/notifikasi` | Pemberitahuan dari data di HP | m05 |
+| `/profil` | Profil, rekap CSV bulanan, kunci, keluar | m06 |
+
+Aplikasi selalu terkunci saat dibuka. Masuk pertama kali di HP perlu internet; setelah itu PIN membuka aplikasi tanpa sinyal (PIN disimpan sebagai hash PBKDF2).
+
+Tanpa `.env.local` aplikasi berjalan dalam **mode demo**: nomor HP dan PIN apa saja diterima, data hanya di HP, dan tombol "Isi data contoh" di Beranda membuat 8 balita dengan riwayat timbang. Nilai contoh diletakkan pada jalur z-score WHO, jadi status dan peringatannya adalah hasil hitungan core yang sebenarnya.
+
+Peringatan dini saat ini memakai aturan sementara di `packages/core/src/warning.ts` (penurunan z-score TB/U dalam 3 bulan terakhir). Ambang batasnya perlu disepakati dengan bidan dan nanti diganti model AI.
+
+Font Poppins dan icon (lucide) ikut di-bundle, jadi tampilan tetap utuh saat offline.
 
 ## Data dan sinkronisasi (apps/pwa/src/data)
 
@@ -44,6 +68,6 @@ Batas toleransi tinggi turun (`HEIGHT_DROP_TOLERANCE_CM`) masih nilai awal dan p
 
 1. Buat project di supabase.com.
 2. Jalankan `supabase/migrations/*.sql` lalu `supabase/seed.sql` di SQL Editor (atau `supabase link` lalu `supabase db push` kalau memakai CLI).
-3. Buat user kader dan bidan di menu Authentication, lalu isi tabel `profiles` (contoh ada di `seed.sql`).
+3. Buat user kader dan bidan di menu Authentication, lalu isi tabel `profiles` (contoh ada di `seed.sql`). Akun kader memakai email `62<nomor HP tanpa 0>@kader.growsense.id` dan password = PIN 6 angka, misalnya `6281234567890@kader.growsense.id`.
 
 Aturan akses: kader hanya melihat Posyandu sendiri, bidan melihat semua Posyandu di Puskesmasnya. Data tidak dihapus permanen, cukup isi `deleted_at`. `npm test -w @growsense/db` menjalankan migrasi di PGlite dan menguji aturan ini.

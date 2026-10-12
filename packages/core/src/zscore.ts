@@ -68,6 +68,18 @@ function zRestricted(lms: Lms, y: number): number {
 
 const inAgeRange = (ageDays: number) => ageDays >= 0 && ageDays <= MAX_AGE_DAYS
 
+/** Measurement on the WHO reference line `z` at this age, for drawing growth charts. */
+export function referenceValue(
+  indicator: 'heightForAge' | 'weightForAge',
+  sex: Sex,
+  ageDays: number,
+  z: number,
+): number | null {
+  if (!inAgeRange(ageDays)) return null
+  const lms = lmsAt(indicator === 'heightForAge' ? lengthForAge : weightForAge, sex, Math.round(ageDays))
+  return lms && valueAt(lms, z)
+}
+
 /** Length/height for age (PB/U, TB/U). Expects a position-adjusted height. */
 export function zHeightForAge(sex: Sex, ageDays: number, heightCm: number): number | null {
   if (!inAgeRange(ageDays)) return null

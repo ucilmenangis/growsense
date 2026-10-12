@@ -68,7 +68,8 @@ describe('push', () => {
     await newChild()
     await push(db, remote)
     const sent = remote.upserts[0]!.rows[0]!
-    for (const column of ['dirty', 'rev', 'updated_at', 'created_at', 'created_by']) expect(sent).not.toHaveProperty(column)
+    for (const column of ['dirty', 'rev', 'updated_at', 'created_at', 'created_by'])
+      expect(sent).not.toHaveProperty(column)
   })
 
   it('keeps rows dirty when the request fails', async () => {
@@ -137,7 +138,10 @@ describe('pull', () => {
     remote.serverWrite('children', [serverChild('00000000-0000-4000-8000-0000000000b2', 'Baru')])
     await pull(db, remote)
     // Committed after the pull, but stamped 30 s before the newest row the client saw.
-    const late = { ...serverChild('00000000-0000-4000-8000-0000000000a1', 'Telat'), updated_at: new Date(remote.clock - 30_000).toISOString() }
+    const late = {
+      ...serverChild('00000000-0000-4000-8000-0000000000a1', 'Telat'),
+      updated_at: new Date(remote.clock - 30_000).toISOString(),
+    }
     remote.tables.children.set(late.id, late)
     await pull(db, remote)
     expect((await db.children.get(late.id))?.full_name).toBe('Telat')

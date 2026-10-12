@@ -28,12 +28,7 @@ export interface IndicatorResult {
   category: Category
 }
 
-export type Flag =
-  | 'haz_tidak_wajar'
-  | 'waz_tidak_wajar'
-  | 'whz_tidak_wajar'
-  | 'tinggi_turun'
-  | 'tanggal_mundur'
+export type Flag = 'haz_tidak_wajar' | 'waz_tidak_wajar' | 'whz_tidak_wajar' | 'tinggi_turun' | 'tanggal_mundur'
 
 export interface Assessment {
   input: MeasurementInput

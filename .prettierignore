@@ -1,0 +1,6 @@
+node_modules
+dist
+dev-dist
+package-lock.json
+packages/core/src/who/tables.ts
+packages/core/data
