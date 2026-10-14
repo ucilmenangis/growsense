@@ -1,7 +1,13 @@
 // Height for age against the WHO reference lines, drawn as plain SVG.
-import { adjustHeightForPosition, ageInDays, MAX_AGE_DAYS, referenceValue, type Sex } from '@growsense/core'
-import type { LocalMeasurement } from '../data/db'
-import { num } from '../lib/format'
+import {
+  adjustHeightForPosition,
+  ageInDays,
+  MAX_AGE_DAYS,
+  num,
+  referenceValue,
+  type MeasurementRow,
+  type Sex,
+} from '@growsense/core'
 
 const W = 320
 const H = 210
@@ -22,7 +28,7 @@ export function GrowthChart({
 }: {
   sex: Sex
   birthDate: string
-  measurements: LocalMeasurement[]
+  measurements: Pick<MeasurementRow, 'measured_at' | 'height_cm' | 'position'>[]
 }) {
   const points = measurements
     .filter((m) => m.height_cm !== null)

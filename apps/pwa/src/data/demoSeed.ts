@@ -1,6 +1,6 @@
 // Example children for demo mode. Values are placed on chosen WHO z-score paths, so the
 // statuses and warnings they produce are real outputs of @growsense/core.
-import { ageInDays, referenceValue, type Sex } from '@growsense/core'
+import { ageInDays, referenceValue, shiftMonths, type Sex } from '@growsense/core'
 import type { GrowSenseDb } from './db'
 import { todayIso } from './queries'
 import { addChild, recordMeasurement } from './repo'
@@ -125,12 +125,6 @@ const EXAMPLES: Example[] = [
     factors: good,
   },
 ]
-
-function shiftMonths(iso: string, months: number): string {
-  const d = new Date(`${iso}T00:00:00`)
-  d.setMonth(d.getMonth() + months)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 

@@ -6,15 +6,7 @@ export function Card({ className = '', children }: { className?: string; childre
   return <section className={`rounded-xl bg-surface-lowest p-4 shadow-card ${className}`}>{children}</section>
 }
 
-export function Badge({ className = '', children }: { className?: string; children: ReactNode }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${className}`}
-    >
-      {children}
-    </span>
-  )
-}
+export { Badge } from '@growsense/ui'
 
 type Variant = 'primary' | 'secondary' | 'danger'
 

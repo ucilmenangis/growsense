@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function load(file) {
-  const rows = readFileSync(join(root, 'data/who', file), 'utf8').trim().split('\n').slice(1)
+  const rows = readFileSync(join(root, 'data/who', file), 'utf8')
+    .trim()
+    .split('\n')
+    .slice(1)
   const bySex = { 1: [], 2: [] }
   let start = null
   for (const row of rows) {

@@ -1,5 +1,5 @@
 import type { RiskLevel } from '@growsense/core'
-import { Badge } from './ui'
+import { Badge } from './Badge'
 
 export const riskTone: Record<RiskLevel, string> = {
   tinggi: 'bg-danger-container text-danger',

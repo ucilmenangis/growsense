@@ -49,3 +49,22 @@ export interface MeasurementRow extends ServerOwned {
 }
 
 export type SyncTable = 'children' | 'measurements'
+
+/**
+ * Follow up stages after an early warning. Each note the bidan writes is one row; the latest
+ * row of a child gives the current stage, so the history stays readable.
+ */
+export type FollowUpStage = 'rujukan' | 'intervensi' | 'kunjungan' | 'evaluasi' | 'selesai'
+
+export interface FollowUpRow extends ServerOwned {
+  id: string
+  child_id: string
+  stage: FollowUpStage
+  /** YYYY-MM-DD the action took place. */
+  done_at: string
+  /** YYYY-MM-DD of the next planned check, if any. */
+  next_at: string | null
+  actions: string[]
+  note: string | null
+  recorded_by?: string | null
+}

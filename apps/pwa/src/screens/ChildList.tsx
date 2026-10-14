@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { Plus, Scale, Search, UserPlus, X } from 'lucide-react'
 import { Link } from 'react-router'
-import { Avatar, RiskBadge } from '../components/StatusParts'
+import { Avatar, RiskBadge } from '@growsense/ui'
 import { Empty } from '../components/ui'
 import { db } from '../data/instance'
 import { todayIso, useChildSummaries, type ChildSummary } from '../data/queries'
