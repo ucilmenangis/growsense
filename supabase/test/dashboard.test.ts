@@ -133,14 +133,48 @@ describe('area_monthly', () => {
     expect(core.every((r) => r.stunting === null || r.stunting === 0 || r.stunting >= 3)).toBe(true)
   })
 
-  it('never leaves a single hidden dusun that the total gives back', () => {
+  it('hides a count for all dusun or none, so the total cannot give a hidden value back', () => {
+    let hiddenGroups = 0
+    let shownGroups = 0
     for (const month of months) {
       const rows = core.filter((r) => r.month === month && r.area !== null)
-      for (const k of ['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const)
-        expect(rows.filter((r) => r[k] === null).length, `${month} ${k}`).not.toBe(1)
-      for (const k of ['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak'] as const)
-        expect(rows.filter((r) => r.factors[k].no === null).length, `${month} ${k}`).not.toBe(1)
+      const values = [
+        ...(['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const).map((k) => rows.map((r) => r[k])),
+        ...(['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak'] as const).map((k) =>
+          rows.map((r) => r.factors[k].no),
+        ),
+      ]
+      for (const v of values) {
+        const hidden = v.filter((x) => x === null).length
+        expect([0, rows.length]).toContain(hidden)
+        if (hidden) hiddenGroups++
+        else shownGroups++
+      }
     }
+    expect(hiddenGroups).toBeGreaterThan(0)
+    expect(shownGroups).toBeGreaterThan(0)
+  })
+
+  it('adds up a period the same way as core', async () => {
+    const last3 = months.slice(-3)
+    const sql = (
+      await as(ids.pemdes, () =>
+        db.query<AreaStat>('select * from area_monthly($1, $2, false)', [`${last3[0]}-01`, TODAY]),
+      )
+    ).rows
+    const corePeriod = areaStats(
+      data.posyandu,
+      monthlyStats(
+        data.posyandu.map((p) => p.id),
+        data.children,
+        data.measurements,
+        last3,
+      ),
+      { byMonth: false },
+    )
+    expect(sql).toEqual(corePeriod)
+    expect(corePeriod).toHaveLength(6)
+    expect(corePeriod.filter((r) => r.area !== null).every((r) => r.stunting !== null)).toBe(true)
   })
 
   it('gives kader nothing', async () => {

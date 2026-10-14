@@ -154,23 +154,29 @@ function hideMeasure(a: AreaStat, k: MeasureKey) {
 /** Code point order, the same as `collate "C"` in SQL. */
 const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
+/** Month label of figures added up over a whole period. */
+export const PERIOD = 'periode'
+
 /**
  * Groups posyandu figures by dusun (the posyandu name when no dusun is set) and adds one total
- * per month with `area` null. With `suppress`, health counts of 1 or 2 are hidden, and when only
- * one dusun is hidden for a count in a month, the next smallest dusun is hidden too, so the total
- * minus the other dusun does not give it back. Same as area_monthly in the dashboard migration.
+ * per month with `area` null. With `suppress`, health counts of 1 or 2 are hidden, and when any
+ * dusun is hidden for a count in a month, that count is hidden for every dusun in the month, so
+ * the total minus the other dusun cannot give a hidden value back. With `byMonth` false all
+ * months are added up into one row per area (month PERIOD, counted in child months). Same as
+ * area_monthly in the dashboard migration.
  */
 export function areaStats(
   posyandu: { id: string; name: string; dusun: string | null }[],
   stats: MonthlyStat[],
-  suppress = true,
+  { suppress = true, byMonth = true }: { suppress?: boolean; byMonth?: boolean } = {},
 ): AreaStat[] {
   const areaOf = new Map(posyandu.map((p) => [p.id, p.dusun ?? p.name]))
   const groups = new Map<string, MonthlyStat[]>()
   for (const s of stats) {
     const area = areaOf.get(s.posyandu_id)
     if (area === undefined) continue
-    for (const key of [`${area}|${s.month}`, `|${s.month}`]) groups.set(key, [...(groups.get(key) ?? []), s])
+    const month = byMonth ? s.month : PERIOD
+    for (const key of [`${area}|${month}`, `|${month}`]) groups.set(key, [...(groups.get(key) ?? []), s])
   }
   const out: AreaStat[] = []
   for (const [key, rows] of groups) {
@@ -198,16 +204,8 @@ export function areaStats(
       for (const k of [...COUNT_KEYS, ...FACTOR_KEYS]) {
         const total = rows.find((a) => a.area === null)!
         const areas = rows.filter((a) => a.area !== null)
-        const small = areas.filter((a) => isSmall(measure(a, k)!))
-        const complement =
-          small.length === 1
-            ? areas
-                .filter((a) => !isSmall(measure(a, k)!))
-                .sort((a, b) => measure(a, k)! - measure(b, k)! || byCodePoint(a.area!, b.area!))[0]
-            : undefined
         if (isSmall(measure(total, k)!)) hideMeasure(total, k)
-        for (const a of small) hideMeasure(a, k)
-        if (complement) hideMeasure(complement, k)
+        if (areas.some((a) => isSmall(measure(a, k)!))) for (const a of areas) hideMeasure(a, k)
       }
     }
   }

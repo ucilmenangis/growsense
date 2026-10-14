@@ -153,10 +153,12 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Per dusun (area null = whole puskesmas), for Pemdes and Dinkes as well as the bidan.
--- Health counts of 1 or 2 are hidden. When only one dusun is hidden for a count in a month, the
--- next smallest dusun is hidden too, so the village total minus the other dusun does not give it
--- back. Same rules as areaStats in packages/core/src/stats.ts.
-create function public.area_monthly(p_from date, p_to date)
+-- Health counts of 1 or 2 are hidden. When any dusun is hidden for a count in a month, that count
+-- is hidden for every dusun in the month, so the village total minus the other dusun cannot give
+-- a hidden value back. With p_by_month false the months are added up into one row per dusun
+-- (month = 'periode', counted in child months), which hides far fewer values. Same rules as
+-- areaStats in packages/core/src/stats.ts.
+create function public.area_monthly(p_from date, p_to date, p_by_month boolean default true)
 returns table (
   area text,
   month text,
@@ -170,7 +172,8 @@ returns table (
 )
 language sql stable security definer set search_path = public as $$
   with counts as (
-    select mc.*, coalesce(po.dusun, po.name) as area_name
+    select mc.*, coalesce(po.dusun, po.name) as area_name,
+      case when p_by_month then mc.month else 'periode' end as period
     from public.monthly_counts(
       (select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin', 'pemdes')), p_from, p_to
     ) mc
@@ -179,7 +182,7 @@ language sql stable security definer set search_path = public as $$
   grouped as (
     select
       case when grouping(area_name) = 1 then null else area_name end as area,
-      month,
+      period as month,
       sum(sasaran)::int as sasaran,
       sum(ditimbang)::int as ditimbang,
       sum(stunting)::int as stunting,
@@ -195,7 +198,7 @@ language sql stable security definer set search_path = public as $$
       sum(sanitasi_layak_no)::int as sanitasi_layak,
       sum(sanitasi_layak_answered)::int as sanitasi_layak_answered
     from counts
-    group by grouping sets ((area_name, month), (month))
+    group by grouping sets ((area_name, period), (period))
   ),
   long as (
     select g.area, g.month, v.measure, v.value, v.value between 1 and 2 as small
@@ -209,17 +212,14 @@ language sql stable security definer set search_path = public as $$
   ),
   ranked as (
     select l.*,
-      count(*) filter (where l.small) over (partition by l.month, l.measure, l.area is null) as small_count,
-      row_number() over (
-        partition by l.month, l.measure, l.area is null, l.small order by l.value, l.area collate "C"
-      ) as rank_in_group
+      count(*) filter (where l.small) over (partition by l.month, l.measure, l.area is null) as small_count
     from long l
   ),
   hidden as (
     select area, month, measure,
       case
         when small then null
-        when area is not null and small_count = 1 and rank_in_group = 1 then null
+        when area is not null and small_count > 0 then null
         else value
       end as value
     from ranked
@@ -254,8 +254,8 @@ $$;
 -- dashboard calls, and only to signed in users.
 revoke execute on function public.monthly_counts(uuid, date, date) from public, anon, authenticated;
 revoke execute on function public.posyandu_monthly(date, date) from public, anon;
-revoke execute on function public.area_monthly(date, date) from public, anon;
+revoke execute on function public.area_monthly(date, date, boolean) from public, anon;
 revoke execute on function public.my_role() from public, anon;
 grant execute on function public.posyandu_monthly(date, date) to authenticated;
-grant execute on function public.area_monthly(date, date) to authenticated;
+grant execute on function public.area_monthly(date, date, boolean) to authenticated;
 grant execute on function public.my_role() to authenticated;
