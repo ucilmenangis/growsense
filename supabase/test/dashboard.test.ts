@@ -1,6 +1,6 @@
 // Dashboard migration: Pemdes role, follow up notes, and posyandu_monthly against core's monthlyStats.
 import type { PGlite } from '@electric-sql/pglite'
-import { demoDataset, lastMonths, monthlyStats, type MonthlyStat } from '@growsense/core'
+import { areaStats, demoDataset, lastMonths, monthlyStats, type AreaStat, type MonthlyStat } from '@growsense/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { asUser, migratedDb } from './helpers'
 
@@ -83,16 +83,58 @@ describe('posyandu_monthly', () => {
     expect(core.some((c) => c.stunting > 0 && c.factors.sanitasi_layak.no > 0)).toBe(true)
   })
 
-  it('is open to pemdes, but only for their own puskesmas', async () => {
-    const rows = (await as(ids.pemdes, () => monthly('2026-09-01', '2026-09-30'))).rows
-    expect(rows).toHaveLength(15)
+  it('is closed to pemdes and kader', async () => {
+    expect((await as(ids.pemdes, () => monthly('2026-09-01', '2026-09-30'))).rows).toEqual([])
+    expect((await as(ids.kader, () => monthly('2026-09-01', '2026-09-30'))).rows).toEqual([])
+  })
+
+  it('covers only the caller puskesmas', async () => {
     const other = (await as(ids.otherBidan, () => monthly('2026-09-01', '2026-09-30'))).rows
     expect(other.map((r) => r.posyandu_id)).toEqual([ids.posOther])
     expect(other[0]?.sasaran).toBe(0)
   })
 
+  it('is not callable without login, and the internal counts are not callable at all', async () => {
+    await db.exec('set role anon')
+    try {
+      await expect(db.query(`select * from posyandu_monthly('2026-09-01', '2026-09-30')`)).rejects.toThrow(
+        /permission denied/,
+      )
+    } finally {
+      await db.exec('reset role')
+    }
+    await expect(
+      as(ids.bidan, () =>
+        db.query(`select * from monthly_counts($1, '2026-09-01', '2026-09-30')`, [data.puskesmas.id]),
+      ),
+    ).rejects.toThrow(/permission denied/)
+  })
+})
+
+const areas = (from: string, to: string) => db.query<AreaStat>('select * from area_monthly($1, $2)', [from, to])
+
+describe('area_monthly', () => {
+  const months = lastMonths(TODAY, 12)
+  const core = areaStats(
+    data.posyandu,
+    monthlyStats(
+      data.posyandu.map((p) => p.id),
+      data.children,
+      data.measurements,
+      months,
+    ),
+  )
+
+  it('gives pemdes the same dusun figures as areaStats in core, small counts hidden', async () => {
+    const sql = (await as(ids.pemdes, () => areas(`${months[0]}-01`, TODAY))).rows
+    expect(sql).toEqual(core)
+    expect(core.filter((r) => r.area === null)).toHaveLength(12)
+    expect(core.some((r) => r.wasting === null)).toBe(true)
+    expect(core.every((r) => r.stunting === null || r.stunting === 0 || r.stunting >= 3)).toBe(true)
+  })
+
   it('gives kader nothing', async () => {
-    expect((await as(ids.kader, () => monthly('2026-09-01', '2026-09-30'))).rows).toEqual([])
+    expect((await as(ids.kader, () => areas('2026-09-01', '2026-09-30'))).rows).toEqual([])
   })
 })
 

@@ -50,9 +50,89 @@ create policy "edit follow ups" on public.follow_ups for update to authenticated
   using (public.my_role() in ('bidan', 'admin') and public.can_access_child(child_id))
   with check (public.my_role() in ('bidan', 'admin') and public.can_access_child(child_id));
 
--- Monthly figures per posyandu for the caller's puskesmas, counts only. Same rules as
--- monthlyStats in packages/core/src/stats.ts: children under five at the end of the month,
--- status from the last measurement of the month, implausible values left out.
+-- Monthly counts per posyandu of one puskesmas. Same rules as monthlyStats in
+-- packages/core/src/stats.ts: children under five at the end of the month, status from the last
+-- measurement of the month, implausible values left out. Internal: callers go through
+-- posyandu_monthly or area_monthly, which decide the puskesmas from the caller's profile.
+create function public.monthly_counts(p_puskesmas uuid, p_from date, p_to date)
+returns table (
+  posyandu_id uuid,
+  month text,
+  sasaran int,
+  ditimbang int,
+  stunting int,
+  sangat_pendek int,
+  wasting int,
+  underweight int,
+  asi_eksklusif_no int,
+  asi_eksklusif_answered int,
+  mpasi_adekuat_no int,
+  mpasi_adekuat_answered int,
+  imunisasi_lengkap_no int,
+  imunisasi_lengkap_answered int,
+  sanitasi_layak_no int,
+  sanitasi_layak_answered int
+)
+language sql stable set search_path = public as $$
+  with months as (
+    select m::date as start, (m + interval '1 month' - interval '1 day')::date as finish
+    from generate_series(date_trunc('month', p_from), date_trunc('month', p_to), interval '1 month') as m
+    where p_to - p_from <= 800
+  ),
+  pos as (
+    select po.id from posyandu po where po.puskesmas_id = p_puskesmas
+  ),
+  eligible as (
+    select c.id, c.posyandu_id, mo.start
+    from children c
+    join pos on pos.id = c.posyandu_id
+    cross join months mo
+    where c.deleted_at is null and c.birth_date <= mo.finish and mo.finish - c.birth_date <= 1826
+  ),
+  last_of_month as (
+    select distinct on (e.id, e.start) e.id, e.start, m.haz, m.waz, m.whz, m.flags, m.risk_factors
+    from eligible e
+    join months mo on mo.start = e.start
+    join measurements m
+      on m.child_id = e.id and m.deleted_at is null and m.measured_at between mo.start and mo.finish
+    order by e.id, e.start, m.measured_at desc, m.id desc
+  ),
+  joined as (
+    select e.posyandu_id, e.start, l.id is not null as measured, l.haz, l.waz, l.whz, l.flags, l.risk_factors
+    from eligible e left join last_of_month l on l.id = e.id and l.start = e.start
+  )
+  select
+    pos.id,
+    to_char(mo.start, 'YYYY-MM'),
+    count(j.posyandu_id)::int,
+    count(*) filter (where j.measured)::int,
+    count(*) filter (where j.haz < -2 and not 'haz_tidak_wajar' = any (j.flags))::int,
+    count(*) filter (where j.haz < -3 and not 'haz_tidak_wajar' = any (j.flags))::int,
+    count(*) filter (where j.whz < -2 and not 'whz_tidak_wajar' = any (j.flags))::int,
+    count(*) filter (where j.waz < -2 and not 'waz_tidak_wajar' = any (j.flags))::int,
+    count(*) filter (where j.risk_factors -> 'asi_eksklusif' = 'false'::jsonb)::int,
+    count(*) filter (where jsonb_typeof(j.risk_factors -> 'asi_eksklusif') = 'boolean')::int,
+    count(*) filter (where j.risk_factors -> 'mpasi_adekuat' = 'false'::jsonb)::int,
+    count(*) filter (where jsonb_typeof(j.risk_factors -> 'mpasi_adekuat') = 'boolean')::int,
+    count(*) filter (where j.risk_factors -> 'imunisasi_lengkap' = 'false'::jsonb)::int,
+    count(*) filter (where jsonb_typeof(j.risk_factors -> 'imunisasi_lengkap') = 'boolean')::int,
+    count(*) filter (where j.risk_factors -> 'sanitasi_layak' = 'false'::jsonb)::int,
+    count(*) filter (where jsonb_typeof(j.risk_factors -> 'sanitasi_layak') = 'boolean')::int
+  from pos
+  cross join months mo
+  left join joined j on j.posyandu_id = pos.id and j.start = mo.start
+  group by pos.id, mo.start
+  order by pos.id, mo.start
+$$;
+
+-- Health counts of 1 or 2 are hidden in figures for Pemdes and Dinkes, so a small group does not
+-- point at one family. Matches suppressSmall in packages/core/src/stats.ts.
+create function public.suppress_small(n bigint) returns int
+language sql immutable as $$
+  select case when n between 1 and 2 then null else n::int end
+$$;
+
+-- Per posyandu, for the bidan and admin of the puskesmas.
 create function public.posyandu_monthly(p_from date, p_to date)
 returns table (
   posyandu_id uuid,
@@ -66,68 +146,73 @@ returns table (
   factors jsonb
 )
 language sql stable security definer set search_path = public as $$
-  with me as (
-    select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin', 'pemdes')
-  ),
-  months as (
-    select m::date as start, (m + interval '1 month' - interval '1 day')::date as finish
-    from generate_series(date_trunc('month', p_from), date_trunc('month', p_to), interval '1 month') as m
-    where p_to - p_from <= 800
-  ),
-  pos as (
-    select po.id from posyandu po join me on me.puskesmas_id = po.puskesmas_id
-  ),
-  eligible as (
-    select c.id, c.posyandu_id, mo.start, mo.finish
-    from children c
-    join pos on pos.id = c.posyandu_id
-    cross join months mo
-    where c.deleted_at is null and c.birth_date <= mo.finish and mo.finish - c.birth_date <= 1826
-  ),
-  last_of_month as (
-    select distinct on (e.id, e.start) e.id, e.start, m.haz, m.waz, m.whz, m.flags, m.risk_factors
-    from eligible e
-    join measurements m
-      on m.child_id = e.id and m.deleted_at is null and m.measured_at between e.start and e.finish
-    order by e.id, e.start, m.measured_at desc, m.id desc
-  ),
-  joined as (
-    select e.posyandu_id, e.start, l.id is not null as measured, l.haz, l.waz, l.whz, l.flags, l.risk_factors
-    from eligible e left join last_of_month l on l.id = e.id and l.start = e.start
-  ),
-  factor_keys as (
-    select unnest(array['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak']) as k
-  ),
-  factor_counts as (
-    select j.posyandu_id, j.start, fk.k,
-      count(*) filter (where jsonb_typeof(j.risk_factors -> fk.k) = 'boolean')::int as answered,
-      count(*) filter (where j.risk_factors -> fk.k = 'false'::jsonb)::int as no
-    from joined j cross join factor_keys fk
-    where j.measured
-    group by j.posyandu_id, j.start, fk.k
-  ),
-  grid as (
-    select pos.id as posyandu_id, mo.start from pos cross join months mo
-  )
   select
-    g.posyandu_id,
-    to_char(g.start, 'YYYY-MM'),
-    count(j.posyandu_id)::int,
-    count(*) filter (where j.measured)::int,
-    count(*) filter (where j.haz < -2 and not 'haz_tidak_wajar' = any (j.flags))::int,
-    count(*) filter (where j.haz < -3 and not 'haz_tidak_wajar' = any (j.flags))::int,
-    count(*) filter (where j.whz < -2 and not 'whz_tidak_wajar' = any (j.flags))::int,
-    count(*) filter (where j.waz < -2 and not 'waz_tidak_wajar' = any (j.flags))::int,
-    coalesce(
-      (select jsonb_object_agg(fc.k, jsonb_build_object('no', fc.no, 'answered', fc.answered))
-       from factor_counts fc where fc.posyandu_id = g.posyandu_id and fc.start = g.start),
-      (select jsonb_object_agg(k, jsonb_build_object('no', 0, 'answered', 0)) from factor_keys)
+    mc.posyandu_id, mc.month, mc.sasaran, mc.ditimbang, mc.stunting, mc.sangat_pendek, mc.wasting, mc.underweight,
+    jsonb_build_object(
+      'asi_eksklusif', jsonb_build_object('no', mc.asi_eksklusif_no, 'answered', mc.asi_eksklusif_answered),
+      'mpasi_adekuat', jsonb_build_object('no', mc.mpasi_adekuat_no, 'answered', mc.mpasi_adekuat_answered),
+      'imunisasi_lengkap', jsonb_build_object('no', mc.imunisasi_lengkap_no, 'answered', mc.imunisasi_lengkap_answered),
+      'sanitasi_layak', jsonb_build_object('no', mc.sanitasi_layak_no, 'answered', mc.sanitasi_layak_answered)
     )
-  from grid g
-  left join joined j on j.posyandu_id = g.posyandu_id and j.start = g.start
-  group by g.posyandu_id, g.start
-  order by g.posyandu_id, g.start
+  from public.monthly_counts(
+    (select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin')), p_from, p_to
+  ) mc
 $$;
 
-revoke execute on function public.posyandu_monthly(date, date) from public;
+-- Per dusun (area null = whole puskesmas), for Pemdes and Dinkes as well as the bidan.
+-- Small health counts are hidden; the totals of all children stay exact.
+create function public.area_monthly(p_from date, p_to date)
+returns table (
+  area text,
+  month text,
+  sasaran int,
+  ditimbang int,
+  stunting int,
+  sangat_pendek int,
+  wasting int,
+  underweight int,
+  factors jsonb
+)
+language sql stable security definer set search_path = public as $$
+  with counts as (
+    select mc.*, coalesce(po.dusun, po.name) as area_name
+    from public.monthly_counts(
+      (select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin', 'pemdes')), p_from, p_to
+    ) mc
+    join posyandu po on po.id = mc.posyandu_id
+  ),
+  grouped as (
+    select
+      case when grouping(area_name) = 1 then null else area_name end as area,
+      month,
+      sum(sasaran) as sasaran, sum(ditimbang) as ditimbang, sum(stunting) as stunting,
+      sum(sangat_pendek) as sangat_pendek, sum(wasting) as wasting, sum(underweight) as underweight,
+      sum(asi_eksklusif_no) as asi_no, sum(asi_eksklusif_answered) as asi_answered,
+      sum(mpasi_adekuat_no) as mpasi_no, sum(mpasi_adekuat_answered) as mpasi_answered,
+      sum(imunisasi_lengkap_no) as imunisasi_no, sum(imunisasi_lengkap_answered) as imunisasi_answered,
+      sum(sanitasi_layak_no) as sanitasi_no, sum(sanitasi_layak_answered) as sanitasi_answered
+    from counts
+    group by grouping sets ((area_name, month), (month))
+  )
+  select
+    area, month, sasaran::int, ditimbang::int,
+    suppress_small(stunting), suppress_small(sangat_pendek), suppress_small(wasting), suppress_small(underweight),
+    jsonb_build_object(
+      'asi_eksklusif', jsonb_build_object('no', suppress_small(asi_no), 'answered', asi_answered::int),
+      'mpasi_adekuat', jsonb_build_object('no', suppress_small(mpasi_no), 'answered', mpasi_answered::int),
+      'imunisasi_lengkap', jsonb_build_object('no', suppress_small(imunisasi_no), 'answered', imunisasi_answered::int),
+      'sanitasi_layak', jsonb_build_object('no', suppress_small(sanitasi_no), 'answered', sanitasi_answered::int)
+    )
+  from grouped
+  order by area nulls first, month
+$$;
+
+-- Supabase grants new functions to anon and authenticated by default; open only what the
+-- dashboard calls, and only to signed in users.
+revoke execute on function public.monthly_counts(uuid, date, date) from public, anon, authenticated;
+revoke execute on function public.posyandu_monthly(date, date) from public, anon;
+revoke execute on function public.area_monthly(date, date) from public, anon;
+revoke execute on function public.my_role() from public, anon;
 grant execute on function public.posyandu_monthly(date, date) to authenticated;
+grant execute on function public.area_monthly(date, date) to authenticated;
+grant execute on function public.my_role() to authenticated;

@@ -118,3 +118,60 @@ export function sumStats(rows: MonthlyStat[], posyandu_id = 'total', month = row
   }
   return total
 }
+
+/** Health counts this small are hidden from Pemdes and Dinkes, so they cannot point at one family. */
+export const SUPPRESS_BELOW = 3
+
+export const suppressSmall = (n: number): number | null => (n > 0 && n < SUPPRESS_BELOW ? null : n)
+
+/** Figures for a dusun, or for the whole puskesmas when `area` is null. Hidden counts are null. */
+export interface AreaStat {
+  area: string | null
+  month: string
+  sasaran: number
+  ditimbang: number
+  stunting: number | null
+  sangat_pendek: number | null
+  wasting: number | null
+  underweight: number | null
+  factors: Record<keyof Required<RiskFactors>, { no: number | null; answered: number }>
+}
+
+/**
+ * Groups posyandu figures by dusun (the posyandu name when no dusun is set) and adds one total
+ * per month with `area` null. Same as area_monthly in the dashboard migration.
+ */
+export function areaStats(
+  posyandu: { id: string; name: string; dusun: string | null }[],
+  stats: MonthlyStat[],
+  suppress = true,
+): AreaStat[] {
+  const areaOf = new Map(posyandu.map((p) => [p.id, p.dusun ?? p.name]))
+  const groups = new Map<string, MonthlyStat[]>()
+  for (const s of stats) {
+    const area = areaOf.get(s.posyandu_id)
+    if (area === undefined) continue
+    for (const key of [`${area}|${s.month}`, `|${s.month}`]) groups.set(key, [...(groups.get(key) ?? []), s])
+  }
+  const hide = suppress ? suppressSmall : (n: number) => n
+  const out: AreaStat[] = []
+  for (const [key, rows] of groups) {
+    const [area, month] = key.split('|') as [string, string]
+    const t = sumStats(rows, area, month)
+    out.push({
+      area: area || null,
+      month,
+      sasaran: t.sasaran,
+      ditimbang: t.ditimbang,
+      stunting: hide(t.stunting),
+      sangat_pendek: hide(t.sangat_pendek),
+      wasting: hide(t.wasting),
+      underweight: hide(t.underweight),
+      factors: Object.fromEntries(
+        FACTOR_KEYS.map((k) => [k, { no: hide(t.factors[k].no), answered: t.factors[k].answered }]),
+      ) as AreaStat['factors'],
+    })
+  }
+  const areaKey = (a: AreaStat) => (a.area === null ? '' : `~${a.area}`)
+  return out.sort((a, b) => areaKey(a).localeCompare(areaKey(b)) || a.month.localeCompare(b.month))
+}
