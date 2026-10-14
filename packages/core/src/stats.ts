@@ -122,11 +122,12 @@ export function sumStats(rows: MonthlyStat[], posyandu_id = 'total', month = row
 /** Health counts this small are hidden from Pemdes and Dinkes, so they cannot point at one family. */
 export const SUPPRESS_BELOW = 3
 
-const isSmall = (n: number) => n > 0 && n < SUPPRESS_BELOW
+const isSmall = (n: number | null) => n !== null && n > 0 && n < SUPPRESS_BELOW
 
 /** Figures for a dusun, or for the whole puskesmas when `area` is null. Hidden counts are null. */
 export interface AreaStat {
   area: string | null
+  /** YYYY-MM, or YYYY-Qn for a quarter. */
   month: string
   sasaran: number
   ditimbang: number
@@ -138,81 +139,104 @@ export interface AreaStat {
 }
 
 const COUNT_KEYS = ['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const
-type MeasureKey = (typeof COUNT_KEYS)[number] | (typeof FACTOR_KEYS)[number]
+const MEASURES = [...COUNT_KEYS, ...FACTOR_KEYS] as const
+type MeasureKey = (typeof MEASURES)[number]
+const isCount = (k: MeasureKey): k is (typeof COUNT_KEYS)[number] => (COUNT_KEYS as readonly string[]).includes(k)
 
-function measure(a: AreaStat, k: MeasureKey): number | null {
-  return (COUNT_KEYS as readonly string[]).includes(k)
-    ? a[k as (typeof COUNT_KEYS)[number]]
-    : a.factors[k as (typeof FACTOR_KEYS)[number]].no
-}
+const measure = (a: AreaStat, k: MeasureKey) => (isCount(k) ? a[k] : a.factors[k].no)
 
-function hideMeasure(a: AreaStat, k: MeasureKey) {
-  if ((COUNT_KEYS as readonly string[]).includes(k)) a[k as (typeof COUNT_KEYS)[number]] = null
-  else a.factors[k as (typeof FACTOR_KEYS)[number]].no = null
+function hide(a: AreaStat, k: MeasureKey) {
+  if (isCount(k)) a[k] = null
+  else a.factors[k].no = null
 }
 
 /** Code point order, the same as `collate "C"` in SQL. */
 const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
-/** Month label of figures added up over a whole period. */
-export const PERIOD = 'periode'
-
-/**
- * Groups posyandu figures by dusun (the posyandu name when no dusun is set) and adds one total
- * per month with `area` null. With `suppress`, health counts of 1 or 2 are hidden, and when any
- * dusun is hidden for a count in a month, that count is hidden for every dusun in the month, so
- * the total minus the other dusun cannot give a hidden value back. With `byMonth` false all
- * months are added up into one row per area (month PERIOD, counted in child months). Same as
- * area_monthly in the dashboard migration.
- */
-export function areaStats(
-  posyandu: { id: string; name: string; dusun: string | null }[],
-  stats: MonthlyStat[],
-  { suppress = true, byMonth = true }: { suppress?: boolean; byMonth?: boolean } = {},
-): AreaStat[] {
-  const areaOf = new Map(posyandu.map((p) => [p.id, p.dusun ?? p.name]))
-  const groups = new Map<string, MonthlyStat[]>()
-  for (const s of stats) {
-    const area = areaOf.get(s.posyandu_id)
-    if (area === undefined) continue
-    const month = byMonth ? s.month : PERIOD
-    for (const key of [`${area}|${month}`, `|${month}`]) groups.set(key, [...(groups.get(key) ?? []), s])
-  }
-  const out: AreaStat[] = []
-  for (const [key, rows] of groups) {
-    const [area, month] = key.split('|') as [string, string]
-    const t = sumStats(rows, area, month)
-    out.push({
-      area: area || null,
-      month,
-      sasaran: t.sasaran,
-      ditimbang: t.ditimbang,
-      stunting: t.stunting,
-      sangat_pendek: t.sangat_pendek,
-      wasting: t.wasting,
-      underweight: t.underweight,
-      factors: Object.fromEntries(
-        FACTOR_KEYS.map((k) => [k, { no: t.factors[k].no, answered: t.factors[k].answered }]),
-      ) as AreaStat['factors'],
-    })
-  }
-
-  if (suppress) {
-    const byMonth = new Map<string, AreaStat[]>()
-    for (const a of out) byMonth.set(a.month, [...(byMonth.get(a.month) ?? []), a])
-    for (const rows of byMonth.values()) {
-      for (const k of [...COUNT_KEYS, ...FACTOR_KEYS]) {
-        const total = rows.find((a) => a.area === null)!
-        const areas = rows.filter((a) => a.area !== null)
-        if (isSmall(measure(total, k)!)) hideMeasure(total, k)
-        if (areas.some((a) => isSmall(measure(a, k)!))) for (const a of areas) hideMeasure(a, k)
-      }
-    }
-  }
-
-  return out.sort(
+const sortAreas = (rows: AreaStat[]) =>
+  rows.sort(
     (a, b) =>
       (a.area === null ? (b.area === null ? 0 : -1) : b.area === null ? 1 : byCodePoint(a.area, b.area)) ||
       a.month.localeCompare(b.month),
   )
+
+function toArea(t: MonthlyStat, area: string | null, month: string): AreaStat {
+  return {
+    area,
+    month,
+    sasaran: t.sasaran,
+    ditimbang: t.ditimbang,
+    stunting: t.stunting,
+    sangat_pendek: t.sangat_pendek,
+    wasting: t.wasting,
+    underweight: t.underweight,
+    factors: Object.fromEntries(
+      FACTOR_KEYS.map((k) => [k, { no: t.factors[k].no, answered: t.factors[k].answered }]),
+    ) as AreaStat['factors'],
+  }
+}
+
+/** YYYY-MM to YYYY-Qn. */
+export const quarterOf = (month: string) =>
+  `${month.slice(0, 4)}-Q${Math.floor((Number(month.slice(5, 7)) - 1) / 3) + 1}`
+
+/** The three YYYY-MM months of a YYYY-Qn quarter. */
+export function quarterMonths(quarter: string): string[] {
+  const first = (Number(quarter.slice(6)) - 1) * 3 + 1
+  return [0, 1, 2].map((i) => `${quarter.slice(0, 4)}-${String(first + i).padStart(2, '0')}`)
+}
+
+/** The last quarter that ended before `today` (YYYY-MM-DD). */
+export function lastCompletedQuarter(today: string): string {
+  const [y, m] = today.split('-').map(Number) as [number, number]
+  const q = Math.floor((m - 1) / 3)
+  return q === 0 ? `${y - 1}-Q4` : `${y}-Q${q}`
+}
+
+/**
+ * Whole puskesmas per month, for Pemdes and Dinkes. `stats` must cover whole quarters around
+ * `months`. With `suppress`, a health count is hidden for every month of a quarter when any
+ * month of that quarter is 1 or 2. Same as village_monthly in the dashboard migration.
+ */
+export function villageMonthly(stats: MonthlyStat[], months: string[], suppress = true): AreaStat[] {
+  const byMonth = new Map<string, MonthlyStat[]>()
+  for (const s of stats) byMonth.set(s.month, [...(byMonth.get(s.month) ?? []), s])
+  const rows = [...byMonth].map(([month, list]) => toArea(sumStats(list, 'total', month), null, month))
+  if (suppress) {
+    for (const k of MEASURES) {
+      const smallQuarters = new Set(rows.filter((r) => isSmall(measure(r, k))).map((r) => quarterOf(r.month)))
+      for (const r of rows) if (smallQuarters.has(quarterOf(r.month))) hide(r, k)
+    }
+  }
+  return sortAreas(rows.filter((r) => months.includes(r.month)))
+}
+
+/**
+ * Per dusun (the posyandu name when no dusun is set) plus the whole puskesmas, added up over one
+ * quarter in child months. With `suppress`, a health count of 1 or 2 is hidden, and a count is
+ * hidden for every dusun when any dusun is small. Same as dusun_quarterly in the migration, which
+ * also only answers for completed quarters.
+ */
+export function dusunQuarter(
+  posyandu: { id: string; name: string; dusun: string | null }[],
+  stats: MonthlyStat[],
+  quarter: string,
+  suppress = true,
+): AreaStat[] {
+  const months = quarterMonths(quarter)
+  const areaOf = new Map(posyandu.map((p) => [p.id, p.dusun ?? p.name]))
+  const groups = new Map<string, MonthlyStat[]>()
+  for (const s of stats) {
+    const area = areaOf.get(s.posyandu_id)
+    if (area === undefined || !months.includes(s.month)) continue
+    for (const key of [area, '']) groups.set(key, [...(groups.get(key) ?? []), s])
+  }
+  const rows = [...groups].map(([area, list]) => toArea(sumStats(list, area, quarter), area || null, quarter))
+  if (suppress) {
+    for (const k of MEASURES) {
+      const anyDusun = rows.some((r) => r.area !== null && isSmall(measure(r, k)))
+      for (const r of rows) if (isSmall(measure(r, k)) || (r.area !== null && anyDusun)) hide(r, k)
+    }
+  }
+  return sortAreas(rows)
 }

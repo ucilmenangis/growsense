@@ -152,110 +152,170 @@ language sql stable security definer set search_path = public as $$
   ) mc
 $$;
 
--- Per dusun (area null = whole puskesmas), for Pemdes and Dinkes as well as the bidan.
--- Health counts of 1 or 2 are hidden. When any dusun is hidden for a count in a month, that count
--- is hidden for every dusun in the month, so the village total minus the other dusun cannot give
--- a hidden value back. With p_by_month false the months are added up into one row per dusun
--- (month = 'periode', counted in child months), which hides far fewer values. Same rules as
--- areaStats in packages/core/src/stats.ts.
-create function public.area_monthly(p_from date, p_to date, p_by_month boolean default true)
-returns table (
-  area text,
-  month text,
-  sasaran int,
-  ditimbang int,
-  stunting int,
-  sangat_pendek int,
-  wasting int,
-  underweight int,
-  factors jsonb
-)
+-- Figures for Pemdes and Dinkes. Health counts of 1 or 2 are hidden, and every hidden value is
+-- hidden together with the values that could give it back by subtraction:
+--   village_monthly: whole puskesmas per month. A count is hidden for all months of a calendar
+--     quarter when any month of that quarter is small.
+--   dusun_quarterly: per dusun for one completed calendar quarter, in child months. A count is
+--     hidden for every dusun when any dusun is small. Quarters do not overlap and no longer
+--     change, so two calls cannot be subtracted from each other.
+-- Same rules as villageMonthly and dusunQuarter in packages/core/src/stats.ts.
+create function public.pemdes_puskesmas() returns uuid
 language sql stable security definer set search_path = public as $$
+  select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin', 'pemdes')
+$$;
+
+create function public.area_counts(p_from date, p_to date)
+returns table (area text, month text, measure text, value int, answered int)
+language sql stable set search_path = public as $$
   with counts as (
-    select mc.*, coalesce(po.dusun, po.name) as area_name,
-      case when p_by_month then mc.month else 'periode' end as period
-    from public.monthly_counts(
-      (select puskesmas_id from profiles where id = auth.uid() and role in ('bidan', 'admin', 'pemdes')), p_from, p_to
-    ) mc
+    select mc.*, coalesce(po.dusun, po.name) as area_name
+    from public.monthly_counts(public.pemdes_puskesmas(), p_from, p_to) mc
     join posyandu po on po.id = mc.posyandu_id
   ),
   grouped as (
     select
       case when grouping(area_name) = 1 then null else area_name end as area,
-      period as month,
-      sum(sasaran)::int as sasaran,
-      sum(ditimbang)::int as ditimbang,
-      sum(stunting)::int as stunting,
-      sum(sangat_pendek)::int as sangat_pendek,
-      sum(wasting)::int as wasting,
-      sum(underweight)::int as underweight,
-      sum(asi_eksklusif_no)::int as asi_eksklusif,
-      sum(asi_eksklusif_answered)::int as asi_eksklusif_answered,
-      sum(mpasi_adekuat_no)::int as mpasi_adekuat,
-      sum(mpasi_adekuat_answered)::int as mpasi_adekuat_answered,
+      month,
+      sum(sasaran)::int as sasaran, sum(ditimbang)::int as ditimbang,
+      sum(stunting)::int as stunting, sum(sangat_pendek)::int as sangat_pendek,
+      sum(wasting)::int as wasting, sum(underweight)::int as underweight,
+      sum(asi_eksklusif_no)::int as asi_eksklusif, sum(asi_eksklusif_answered)::int as asi_eksklusif_answered,
+      sum(mpasi_adekuat_no)::int as mpasi_adekuat, sum(mpasi_adekuat_answered)::int as mpasi_adekuat_answered,
       sum(imunisasi_lengkap_no)::int as imunisasi_lengkap,
       sum(imunisasi_lengkap_answered)::int as imunisasi_lengkap_answered,
-      sum(sanitasi_layak_no)::int as sanitasi_layak,
-      sum(sanitasi_layak_answered)::int as sanitasi_layak_answered
+      sum(sanitasi_layak_no)::int as sanitasi_layak, sum(sanitasi_layak_answered)::int as sanitasi_layak_answered
     from counts
-    group by grouping sets ((area_name, period), (period))
-  ),
-  long as (
-    select g.area, g.month, v.measure, v.value, v.value between 1 and 2 as small
-    from grouped g
-    cross join lateral (
-      values
-        ('stunting', g.stunting), ('sangat_pendek', g.sangat_pendek), ('wasting', g.wasting),
-        ('underweight', g.underweight), ('asi_eksklusif', g.asi_eksklusif), ('mpasi_adekuat', g.mpasi_adekuat),
-        ('imunisasi_lengkap', g.imunisasi_lengkap), ('sanitasi_layak', g.sanitasi_layak)
-    ) as v (measure, value)
-  ),
-  ranked as (
-    select l.*,
-      count(*) filter (where l.small) over (partition by l.month, l.measure, l.area is null) as small_count
-    from long l
-  ),
-  hidden as (
-    select area, month, measure,
-      case
-        when small then null
-        when area is not null and small_count > 0 then null
-        else value
-      end as value
-    from ranked
-  ),
-  wide as (
-    select area, month,
-      max(value) filter (where measure = 'stunting') as stunting,
-      max(value) filter (where measure = 'sangat_pendek') as sangat_pendek,
-      max(value) filter (where measure = 'wasting') as wasting,
-      max(value) filter (where measure = 'underweight') as underweight,
-      max(value) filter (where measure = 'asi_eksklusif') as asi_eksklusif,
-      max(value) filter (where measure = 'mpasi_adekuat') as mpasi_adekuat,
-      max(value) filter (where measure = 'imunisasi_lengkap') as imunisasi_lengkap,
-      max(value) filter (where measure = 'sanitasi_layak') as sanitasi_layak
-    from hidden
-    group by area, month
+    group by grouping sets ((area_name, month), (month))
   )
-  select
-    g.area, g.month, g.sasaran, g.ditimbang, w.stunting, w.sangat_pendek, w.wasting, w.underweight,
-    jsonb_build_object(
-      'asi_eksklusif', jsonb_build_object('no', w.asi_eksklusif, 'answered', g.asi_eksklusif_answered),
-      'mpasi_adekuat', jsonb_build_object('no', w.mpasi_adekuat, 'answered', g.mpasi_adekuat_answered),
-      'imunisasi_lengkap', jsonb_build_object('no', w.imunisasi_lengkap, 'answered', g.imunisasi_lengkap_answered),
-      'sanitasi_layak', jsonb_build_object('no', w.sanitasi_layak, 'answered', g.sanitasi_layak_answered)
-    )
+  select g.area, g.month, v.measure, v.value, v.answered
   from grouped g
-  join wide w on w.area is not distinct from g.area and w.month = g.month
-  order by g.area collate "C" nulls first, g.month
+  cross join lateral (
+    values
+      ('sasaran', g.sasaran, null::int), ('ditimbang', g.ditimbang, null),
+      ('stunting', g.stunting, null), ('sangat_pendek', g.sangat_pendek, null),
+      ('wasting', g.wasting, null), ('underweight', g.underweight, null),
+      ('asi_eksklusif', g.asi_eksklusif, g.asi_eksklusif_answered),
+      ('mpasi_adekuat', g.mpasi_adekuat, g.mpasi_adekuat_answered),
+      ('imunisasi_lengkap', g.imunisasi_lengkap, g.imunisasi_lengkap_answered),
+      ('sanitasi_layak', g.sanitasi_layak, g.sanitasi_layak_answered)
+  ) as v (measure, value, answered)
+$$;
+
+-- Turns rows of (area, month, measure, value) back into one row per area and month.
+create function public.area_rows(p_rows jsonb)
+returns table (
+  area text, month text, sasaran int, ditimbang int, stunting int, sangat_pendek int, wasting int,
+  underweight int, factors jsonb
+)
+language sql immutable as $$
+  with r as (
+    select x ->> 'area' as area, x ->> 'month' as month, x ->> 'measure' as measure,
+      (x ->> 'value')::int as value, (x ->> 'answered')::int as answered
+    from jsonb_array_elements(p_rows) x
+  )
+  select area, month,
+    max(value) filter (where measure = 'sasaran'),
+    max(value) filter (where measure = 'ditimbang'),
+    max(value) filter (where measure = 'stunting'),
+    max(value) filter (where measure = 'sangat_pendek'),
+    max(value) filter (where measure = 'wasting'),
+    max(value) filter (where measure = 'underweight'),
+    jsonb_build_object(
+      'asi_eksklusif', jsonb_build_object(
+        'no', max(value) filter (where measure = 'asi_eksklusif'),
+        'answered', max(answered) filter (where measure = 'asi_eksklusif')),
+      'mpasi_adekuat', jsonb_build_object(
+        'no', max(value) filter (where measure = 'mpasi_adekuat'),
+        'answered', max(answered) filter (where measure = 'mpasi_adekuat')),
+      'imunisasi_lengkap', jsonb_build_object(
+        'no', max(value) filter (where measure = 'imunisasi_lengkap'),
+        'answered', max(answered) filter (where measure = 'imunisasi_lengkap')),
+      'sanitasi_layak', jsonb_build_object(
+        'no', max(value) filter (where measure = 'sanitasi_layak'),
+        'answered', max(answered) filter (where measure = 'sanitasi_layak'))
+    )
+  from r
+  group by area, month
+  order by area collate "C" nulls first, month
+$$;
+
+create function public.village_monthly(p_from date, p_to date)
+returns table (
+  area text, month text, sasaran int, ditimbang int, stunting int, sangat_pendek int, wasting int,
+  underweight int, factors jsonb
+)
+language sql stable security definer set search_path = public as $$
+  with c as (
+    -- Whole quarters, so the decision to hide does not depend on the range asked for.
+    select * from public.area_counts(
+      date_trunc('quarter', p_from)::date,
+      (date_trunc('quarter', p_to) + interval '3 months' - interval '1 day')::date
+    )
+    where area is null
+  ),
+  marked as (
+    select c.*,
+      count(*) filter (
+        where c.measure not in ('sasaran', 'ditimbang') and c.value between 1 and 2
+      ) over (partition by c.measure, to_char(to_date(c.month, 'YYYY-MM'), 'YYYY-"Q"Q')) as small_in_quarter
+    from c
+  )
+  select * from public.area_rows((
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'area', area, 'month', month, 'measure', measure, 'answered', answered,
+      'value', case when small_in_quarter > 0 then null else value end
+    )), '[]')
+    from marked
+    where month between to_char(p_from, 'YYYY-MM') and to_char(p_to, 'YYYY-MM')
+  ))
+$$;
+
+create function public.dusun_quarterly(p_quarter date)
+returns table (
+  area text, month text, sasaran int, ditimbang int, stunting int, sangat_pendek int, wasting int,
+  underweight int, factors jsonb
+)
+language sql stable security definer set search_path = public as $$
+  with q as (
+    select date_trunc('quarter', p_quarter)::date as start,
+      (date_trunc('quarter', p_quarter) + interval '3 months' - interval '1 day')::date as finish
+  ),
+  c as (
+    -- Completed quarters only: a quarter still filling up could be subtracted from a later call.
+    select ac.area, ac.measure, sum(ac.value)::int as value, sum(ac.answered)::int as answered
+    from q, public.area_counts(q.start, q.finish) ac
+    where q.finish < current_date
+    group by ac.area, ac.measure
+  ),
+  marked as (
+    select c.*,
+      c.measure not in ('sasaran', 'ditimbang') and c.value between 1 and 2 as small,
+      count(*) filter (
+        where c.area is not null and c.measure not in ('sasaran', 'ditimbang') and c.value between 1 and 2
+      ) over (partition by c.measure) as small_dusun
+    from c
+  )
+  select * from public.area_rows((
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'area', area, 'month', (select to_char(start, 'YYYY-"Q"Q') from q), 'measure', measure,
+      'answered', answered,
+      'value', case when small or (area is not null and small_dusun > 0) then null else value end
+    )), '[]')
+    from marked
+  ))
 $$;
 
 -- Supabase grants new functions to anon and authenticated by default; open only what the
 -- dashboard calls, and only to signed in users.
 revoke execute on function public.monthly_counts(uuid, date, date) from public, anon, authenticated;
+revoke execute on function public.area_counts(date, date) from public, anon, authenticated;
+revoke execute on function public.pemdes_puskesmas() from public, anon, authenticated;
 revoke execute on function public.posyandu_monthly(date, date) from public, anon;
-revoke execute on function public.area_monthly(date, date, boolean) from public, anon;
+revoke execute on function public.village_monthly(date, date) from public, anon;
+revoke execute on function public.dusun_quarterly(date) from public, anon;
 revoke execute on function public.my_role() from public, anon;
 grant execute on function public.posyandu_monthly(date, date) to authenticated;
-grant execute on function public.area_monthly(date, date, boolean) to authenticated;
+grant execute on function public.village_monthly(date, date) to authenticated;
+grant execute on function public.dusun_quarterly(date) to authenticated;
 grant execute on function public.my_role() to authenticated;

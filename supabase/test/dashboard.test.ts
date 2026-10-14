@@ -1,10 +1,22 @@
 // Dashboard migration: Pemdes role, follow up notes, and posyandu_monthly against core's monthlyStats.
 import type { PGlite } from '@electric-sql/pglite'
-import { areaStats, demoDataset, lastMonths, monthlyStats, type AreaStat, type MonthlyStat } from '@growsense/core'
+import {
+  demoDataset,
+  dusunQuarter,
+  lastCompletedQuarter,
+  lastMonths,
+  monthlyStats,
+  quarterMonths,
+  todayIso,
+  villageMonthly,
+  type AreaStat,
+  type MonthlyStat,
+} from '@growsense/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { asUser, migratedDb } from './helpers'
 
-const TODAY = '2026-10-14'
+// dusun_quarterly reads current_date, so the example data is built around the real date.
+const TODAY = todayIso()
 const data = demoDataset(TODAY)
 const ids = {
   pkm2: '10000000-0000-4000-8000-000000000002',
@@ -94,7 +106,7 @@ describe('posyandu_monthly', () => {
     expect(other[0]?.sasaran).toBe(0)
   })
 
-  it('is not callable without login, and the internal counts are not callable at all', async () => {
+  it('is not callable without login, and the internal helpers are not callable at all', async () => {
     await db.exec('set role anon')
     try {
       await expect(db.query(`select * from posyandu_monthly('2026-09-01', '2026-09-30')`)).rejects.toThrow(
@@ -108,77 +120,92 @@ describe('posyandu_monthly', () => {
         db.query(`select * from monthly_counts($1, '2026-09-01', '2026-09-30')`, [data.puskesmas.id]),
       ),
     ).rejects.toThrow(/permission denied/)
+    await expect(
+      as(ids.pemdes, () => db.query(`select * from area_counts('2026-09-01', '2026-09-30')`)),
+    ).rejects.toThrow(/permission denied/)
   })
 })
 
-const areas = (from: string, to: string) => db.query<AreaStat>('select * from area_monthly($1, $2)', [from, to])
-
-describe('area_monthly', () => {
-  const months = lastMonths(TODAY, 12)
-  const core = areaStats(
-    data.posyandu,
-    monthlyStats(
-      data.posyandu.map((p) => p.id),
-      data.children,
-      data.measurements,
-      months,
-    ),
+const allMonthly = (months: string[]) =>
+  monthlyStats(
+    data.posyandu.map((p) => p.id),
+    data.children,
+    data.measurements,
+    months,
   )
 
-  it('gives pemdes the same dusun figures as areaStats in core, small counts hidden', async () => {
-    const sql = (await as(ids.pemdes, () => areas(`${months[0]}-01`, TODAY))).rows
-    expect(sql).toEqual(core)
-    expect(core.filter((r) => r.area === null)).toHaveLength(12)
-    expect(core.some((r) => r.wasting === null)).toBe(true)
-    expect(core.every((r) => r.stunting === null || r.stunting === 0 || r.stunting >= 3)).toBe(true)
-  })
+const health = ['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const
+const factorKeys = ['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak'] as const
+const valuesOf = (r: AreaStat) => [...health.map((k) => r[k]), ...factorKeys.map((k) => r.factors[k].no)]
 
-  it('hides a count for all dusun or none, so the total cannot give a hidden value back', () => {
-    let hiddenGroups = 0
-    let shownGroups = 0
-    for (const month of months) {
-      const rows = core.filter((r) => r.month === month && r.area !== null)
-      const values = [
-        ...(['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const).map((k) => rows.map((r) => r[k])),
-        ...(['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak'] as const).map((k) =>
-          rows.map((r) => r.factors[k].no),
-        ),
-      ]
-      for (const v of values) {
-        const hidden = v.filter((x) => x === null).length
-        expect([0, rows.length]).toContain(hidden)
-        if (hidden) hiddenGroups++
-        else shownGroups++
-      }
-    }
-    expect(hiddenGroups).toBeGreaterThan(0)
-    expect(shownGroups).toBeGreaterThan(0)
-  })
+describe('village_monthly', () => {
+  const months = lastMonths(TODAY, 12)
+  // Whole quarters around the twelve months, as the SQL does.
+  const wide = [
+    ...new Set(
+      months.flatMap((m) => quarterMonths(`${m.slice(0, 4)}-Q${Math.floor((Number(m.slice(5)) - 1) / 3) + 1}`)),
+    ),
+  ]
+  const core = villageMonthly(allMonthly(wide), months)
 
-  it('adds up a period the same way as core', async () => {
-    const last3 = months.slice(-3)
+  it('gives pemdes the same figures as core', async () => {
     const sql = (
       await as(ids.pemdes, () =>
-        db.query<AreaStat>('select * from area_monthly($1, $2, false)', [`${last3[0]}-01`, TODAY]),
+        db.query<AreaStat>('select * from village_monthly($1, $2)', [`${months[0]}-01`, TODAY]),
       )
     ).rows
-    const corePeriod = areaStats(
-      data.posyandu,
-      monthlyStats(
-        data.posyandu.map((p) => p.id),
-        data.children,
-        data.measurements,
-        last3,
-      ),
-      { byMonth: false },
-    )
-    expect(sql).toEqual(corePeriod)
-    expect(corePeriod).toHaveLength(6)
-    expect(corePeriod.filter((r) => r.area !== null).every((r) => r.stunting !== null)).toBe(true)
+    expect(sql).toEqual(core)
+    expect(core).toHaveLength(12)
+    expect(core.every((r) => r.area === null)).toBe(true)
+  })
+
+  it('hides a count for the whole quarter or not at all', () => {
+    const byQuarter = new Map<string, AreaStat[]>()
+    for (const r of core) {
+      const q = `${r.month.slice(0, 4)}-${Math.floor((Number(r.month.slice(5)) - 1) / 3)}`
+      byQuarter.set(q, [...(byQuarter.get(q) ?? []), r])
+    }
+    let hidden = 0
+    for (const rows of byQuarter.values()) {
+      for (let i = 0; i < 8; i++) {
+        const n = rows.filter((r) => valuesOf(r)[i] === null).length
+        expect([0, rows.length]).toContain(n)
+        hidden += n
+      }
+    }
+    expect(hidden).toBeGreaterThan(0)
   })
 
   it('gives kader nothing', async () => {
-    expect((await as(ids.kader, () => areas('2026-09-01', '2026-09-30'))).rows).toEqual([])
+    expect(
+      (await as(ids.kader, () => db.query('select * from village_monthly($1, $2)', [`${months[0]}-01`, TODAY]))).rows,
+    ).toEqual([])
+  })
+})
+
+describe('dusun_quarterly', () => {
+  const quarter = lastCompletedQuarter(TODAY)
+  const core = dusunQuarter(data.posyandu, allMonthly(quarterMonths(quarter)), quarter)
+  const call = (date: string) => db.query<AreaStat>('select * from dusun_quarterly($1)', [date])
+
+  it('gives pemdes the same figures as core for the last completed quarter', async () => {
+    const sql = (await as(ids.pemdes, () => call(`${quarterMonths(quarter)[1]}-15`))).rows
+    expect(sql).toEqual(core)
+    expect(core).toHaveLength(6)
+    expect(core.filter((r) => r.area !== null).every((r) => r.stunting !== null)).toBe(true)
+  })
+
+  it('hides a count for every dusun or none', () => {
+    const dusun = core.filter((r) => r.area !== null)
+    for (let i = 0; i < 8; i++) expect([0, dusun.length]).toContain(dusun.filter((r) => valuesOf(r)[i] === null).length)
+  })
+
+  it('answers nothing for the quarter still running', async () => {
+    expect((await as(ids.pemdes, () => call(TODAY))).rows).toEqual([])
+  })
+
+  it('gives kader nothing', async () => {
+    expect((await as(ids.kader, () => call(`${quarterMonths(quarter)[0]}-01`))).rows).toEqual([])
   })
 })
 
