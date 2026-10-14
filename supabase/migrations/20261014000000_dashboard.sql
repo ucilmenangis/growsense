@@ -125,13 +125,6 @@ language sql stable set search_path = public as $$
   order by pos.id, mo.start
 $$;
 
--- Health counts of 1 or 2 are hidden in figures for Pemdes and Dinkes, so a small group does not
--- point at one family. Matches suppressSmall in packages/core/src/stats.ts.
-create function public.suppress_small(n bigint) returns int
-language sql immutable as $$
-  select case when n between 1 and 2 then null else n::int end
-$$;
-
 -- Per posyandu, for the bidan and admin of the puskesmas.
 create function public.posyandu_monthly(p_from date, p_to date)
 returns table (
@@ -160,7 +153,9 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Per dusun (area null = whole puskesmas), for Pemdes and Dinkes as well as the bidan.
--- Small health counts are hidden; the totals of all children stay exact.
+-- Health counts of 1 or 2 are hidden. When only one dusun is hidden for a count in a month, the
+-- next smallest dusun is hidden too, so the village total minus the other dusun does not give it
+-- back. Same rules as areaStats in packages/core/src/stats.ts.
 create function public.area_monthly(p_from date, p_to date)
 returns table (
   area text,
@@ -185,26 +180,74 @@ language sql stable security definer set search_path = public as $$
     select
       case when grouping(area_name) = 1 then null else area_name end as area,
       month,
-      sum(sasaran) as sasaran, sum(ditimbang) as ditimbang, sum(stunting) as stunting,
-      sum(sangat_pendek) as sangat_pendek, sum(wasting) as wasting, sum(underweight) as underweight,
-      sum(asi_eksklusif_no) as asi_no, sum(asi_eksklusif_answered) as asi_answered,
-      sum(mpasi_adekuat_no) as mpasi_no, sum(mpasi_adekuat_answered) as mpasi_answered,
-      sum(imunisasi_lengkap_no) as imunisasi_no, sum(imunisasi_lengkap_answered) as imunisasi_answered,
-      sum(sanitasi_layak_no) as sanitasi_no, sum(sanitasi_layak_answered) as sanitasi_answered
+      sum(sasaran)::int as sasaran,
+      sum(ditimbang)::int as ditimbang,
+      sum(stunting)::int as stunting,
+      sum(sangat_pendek)::int as sangat_pendek,
+      sum(wasting)::int as wasting,
+      sum(underweight)::int as underweight,
+      sum(asi_eksklusif_no)::int as asi_eksklusif,
+      sum(asi_eksklusif_answered)::int as asi_eksklusif_answered,
+      sum(mpasi_adekuat_no)::int as mpasi_adekuat,
+      sum(mpasi_adekuat_answered)::int as mpasi_adekuat_answered,
+      sum(imunisasi_lengkap_no)::int as imunisasi_lengkap,
+      sum(imunisasi_lengkap_answered)::int as imunisasi_lengkap_answered,
+      sum(sanitasi_layak_no)::int as sanitasi_layak,
+      sum(sanitasi_layak_answered)::int as sanitasi_layak_answered
     from counts
     group by grouping sets ((area_name, month), (month))
+  ),
+  long as (
+    select g.area, g.month, v.measure, v.value, v.value between 1 and 2 as small
+    from grouped g
+    cross join lateral (
+      values
+        ('stunting', g.stunting), ('sangat_pendek', g.sangat_pendek), ('wasting', g.wasting),
+        ('underweight', g.underweight), ('asi_eksklusif', g.asi_eksklusif), ('mpasi_adekuat', g.mpasi_adekuat),
+        ('imunisasi_lengkap', g.imunisasi_lengkap), ('sanitasi_layak', g.sanitasi_layak)
+    ) as v (measure, value)
+  ),
+  ranked as (
+    select l.*,
+      count(*) filter (where l.small) over (partition by l.month, l.measure, l.area is null) as small_count,
+      row_number() over (
+        partition by l.month, l.measure, l.area is null, l.small order by l.value, l.area collate "C"
+      ) as rank_in_group
+    from long l
+  ),
+  hidden as (
+    select area, month, measure,
+      case
+        when small then null
+        when area is not null and small_count = 1 and rank_in_group = 1 then null
+        else value
+      end as value
+    from ranked
+  ),
+  wide as (
+    select area, month,
+      max(value) filter (where measure = 'stunting') as stunting,
+      max(value) filter (where measure = 'sangat_pendek') as sangat_pendek,
+      max(value) filter (where measure = 'wasting') as wasting,
+      max(value) filter (where measure = 'underweight') as underweight,
+      max(value) filter (where measure = 'asi_eksklusif') as asi_eksklusif,
+      max(value) filter (where measure = 'mpasi_adekuat') as mpasi_adekuat,
+      max(value) filter (where measure = 'imunisasi_lengkap') as imunisasi_lengkap,
+      max(value) filter (where measure = 'sanitasi_layak') as sanitasi_layak
+    from hidden
+    group by area, month
   )
   select
-    area, month, sasaran::int, ditimbang::int,
-    suppress_small(stunting), suppress_small(sangat_pendek), suppress_small(wasting), suppress_small(underweight),
+    g.area, g.month, g.sasaran, g.ditimbang, w.stunting, w.sangat_pendek, w.wasting, w.underweight,
     jsonb_build_object(
-      'asi_eksklusif', jsonb_build_object('no', suppress_small(asi_no), 'answered', asi_answered::int),
-      'mpasi_adekuat', jsonb_build_object('no', suppress_small(mpasi_no), 'answered', mpasi_answered::int),
-      'imunisasi_lengkap', jsonb_build_object('no', suppress_small(imunisasi_no), 'answered', imunisasi_answered::int),
-      'sanitasi_layak', jsonb_build_object('no', suppress_small(sanitasi_no), 'answered', sanitasi_answered::int)
+      'asi_eksklusif', jsonb_build_object('no', w.asi_eksklusif, 'answered', g.asi_eksklusif_answered),
+      'mpasi_adekuat', jsonb_build_object('no', w.mpasi_adekuat, 'answered', g.mpasi_adekuat_answered),
+      'imunisasi_lengkap', jsonb_build_object('no', w.imunisasi_lengkap, 'answered', g.imunisasi_lengkap_answered),
+      'sanitasi_layak', jsonb_build_object('no', w.sanitasi_layak, 'answered', g.sanitasi_layak_answered)
     )
-  from grouped
-  order by area nulls first, month
+  from grouped g
+  join wide w on w.area is not distinct from g.area and w.month = g.month
+  order by g.area collate "C" nulls first, g.month
 $$;
 
 -- Supabase grants new functions to anon and authenticated by default; open only what the

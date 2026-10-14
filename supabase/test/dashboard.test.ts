@@ -133,6 +133,16 @@ describe('area_monthly', () => {
     expect(core.every((r) => r.stunting === null || r.stunting === 0 || r.stunting >= 3)).toBe(true)
   })
 
+  it('never leaves a single hidden dusun that the total gives back', () => {
+    for (const month of months) {
+      const rows = core.filter((r) => r.month === month && r.area !== null)
+      for (const k of ['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const)
+        expect(rows.filter((r) => r[k] === null).length, `${month} ${k}`).not.toBe(1)
+      for (const k of ['asi_eksklusif', 'mpasi_adekuat', 'imunisasi_lengkap', 'sanitasi_layak'] as const)
+        expect(rows.filter((r) => r.factors[k].no === null).length, `${month} ${k}`).not.toBe(1)
+    }
+  })
+
   it('gives kader nothing', async () => {
     expect((await as(ids.kader, () => areas('2026-09-01', '2026-09-30'))).rows).toEqual([])
   })

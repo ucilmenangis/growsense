@@ -122,7 +122,7 @@ export function sumStats(rows: MonthlyStat[], posyandu_id = 'total', month = row
 /** Health counts this small are hidden from Pemdes and Dinkes, so they cannot point at one family. */
 export const SUPPRESS_BELOW = 3
 
-export const suppressSmall = (n: number): number | null => (n > 0 && n < SUPPRESS_BELOW ? null : n)
+const isSmall = (n: number) => n > 0 && n < SUPPRESS_BELOW
 
 /** Figures for a dusun, or for the whole puskesmas when `area` is null. Hidden counts are null. */
 export interface AreaStat {
@@ -137,9 +137,28 @@ export interface AreaStat {
   factors: Record<keyof Required<RiskFactors>, { no: number | null; answered: number }>
 }
 
+const COUNT_KEYS = ['stunting', 'sangat_pendek', 'wasting', 'underweight'] as const
+type MeasureKey = (typeof COUNT_KEYS)[number] | (typeof FACTOR_KEYS)[number]
+
+function measure(a: AreaStat, k: MeasureKey): number | null {
+  return (COUNT_KEYS as readonly string[]).includes(k)
+    ? a[k as (typeof COUNT_KEYS)[number]]
+    : a.factors[k as (typeof FACTOR_KEYS)[number]].no
+}
+
+function hideMeasure(a: AreaStat, k: MeasureKey) {
+  if ((COUNT_KEYS as readonly string[]).includes(k)) a[k as (typeof COUNT_KEYS)[number]] = null
+  else a.factors[k as (typeof FACTOR_KEYS)[number]].no = null
+}
+
+/** Code point order, the same as `collate "C"` in SQL. */
+const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
 /**
  * Groups posyandu figures by dusun (the posyandu name when no dusun is set) and adds one total
- * per month with `area` null. Same as area_monthly in the dashboard migration.
+ * per month with `area` null. With `suppress`, health counts of 1 or 2 are hidden, and when only
+ * one dusun is hidden for a count in a month, the next smallest dusun is hidden too, so the total
+ * minus the other dusun does not give it back. Same as area_monthly in the dashboard migration.
  */
 export function areaStats(
   posyandu: { id: string; name: string; dusun: string | null }[],
@@ -153,7 +172,6 @@ export function areaStats(
     if (area === undefined) continue
     for (const key of [`${area}|${s.month}`, `|${s.month}`]) groups.set(key, [...(groups.get(key) ?? []), s])
   }
-  const hide = suppress ? suppressSmall : (n: number) => n
   const out: AreaStat[] = []
   for (const [key, rows] of groups) {
     const [area, month] = key.split('|') as [string, string]
@@ -163,15 +181,40 @@ export function areaStats(
       month,
       sasaran: t.sasaran,
       ditimbang: t.ditimbang,
-      stunting: hide(t.stunting),
-      sangat_pendek: hide(t.sangat_pendek),
-      wasting: hide(t.wasting),
-      underweight: hide(t.underweight),
+      stunting: t.stunting,
+      sangat_pendek: t.sangat_pendek,
+      wasting: t.wasting,
+      underweight: t.underweight,
       factors: Object.fromEntries(
-        FACTOR_KEYS.map((k) => [k, { no: hide(t.factors[k].no), answered: t.factors[k].answered }]),
+        FACTOR_KEYS.map((k) => [k, { no: t.factors[k].no, answered: t.factors[k].answered }]),
       ) as AreaStat['factors'],
     })
   }
-  const areaKey = (a: AreaStat) => (a.area === null ? '' : `~${a.area}`)
-  return out.sort((a, b) => areaKey(a).localeCompare(areaKey(b)) || a.month.localeCompare(b.month))
+
+  if (suppress) {
+    const byMonth = new Map<string, AreaStat[]>()
+    for (const a of out) byMonth.set(a.month, [...(byMonth.get(a.month) ?? []), a])
+    for (const rows of byMonth.values()) {
+      for (const k of [...COUNT_KEYS, ...FACTOR_KEYS]) {
+        const total = rows.find((a) => a.area === null)!
+        const areas = rows.filter((a) => a.area !== null)
+        const small = areas.filter((a) => isSmall(measure(a, k)!))
+        const complement =
+          small.length === 1
+            ? areas
+                .filter((a) => !isSmall(measure(a, k)!))
+                .sort((a, b) => measure(a, k)! - measure(b, k)! || byCodePoint(a.area!, b.area!))[0]
+            : undefined
+        if (isSmall(measure(total, k)!)) hideMeasure(total, k)
+        for (const a of small) hideMeasure(a, k)
+        if (complement) hideMeasure(complement, k)
+      }
+    }
+  }
+
+  return out.sort(
+    (a, b) =>
+      (a.area === null ? (b.area === null ? 0 : -1) : b.area === null ? 1 : byCodePoint(a.area, b.area)) ||
+      a.month.localeCompare(b.month),
+  )
 }
