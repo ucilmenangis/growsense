@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
+    "@supabase/supabase-js": "^2.117.3",
+    "supabase": "^2.120.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },

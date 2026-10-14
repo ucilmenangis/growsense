@@ -106,8 +106,32 @@ Sisa risiko yang diketahui: bila kader mengoreksi data triwulan lama, orang yang
 
 ## Supabase
 
+Project tim: `growsense` (ref `vmjncwiwijtckfdnqras`, region Singapore). Supabase CLI ikut sebagai paket npm, jadi cukup `npx supabase`.
+
+Menyiapkan project baru dengan CLI:
+
+```bash
+npx supabase login
+npx supabase projects create growsense --org-id <org> --region ap-southeast-1 --db-password <password>
+npx supabase link --project-ref <ref>
+npx supabase db push                          # semua migrasi, tanpa seed.sql
+npx supabase projects api-keys --reveal -o json
+```
+
+Rahasia disimpan di `supabase/.secrets/` (masuk `.gitignore`, jangan pernah di-commit):
+
+- `db.env`: `DB_PASSWORD` database.
+- `service.env`: `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` (key `secret`). Key ini melewati RLS, jadi hanya untuk skrip di laptop, tidak pernah masuk aplikasi.
+- `accounts.tsv`: login dan kata sandi akun tes.
+
+`apps/pwa/.env.local` dan `apps/web/.env.local` memakai key `publishable`.
+
+`npm run seed:demo -w @growsense/db` mengisi project dengan data contoh dashboard (`demoDataset`, tanggal relatif ke hari ini) dan membuat 4 akun tes: bidan NIP `198001012010012001`, pemdes NIP `198501012015011001`, kader `081100000001` (Posyandu 01), kader `081100000002` (Posyandu 02). Kata sandi acak ditulis ke `accounts.tsv`. Skrip boleh dijalankan ulang: baris di-upsert per id dan akun yang sudah ada tidak diubah. Untuk project kosong tanpa data contoh, jalankan `seed.sql` saja.
+
+Cara manual lewat dashboard Supabase:
+
 1. Buat project di supabase.com.
-2. Jalankan `supabase/migrations/*.sql` lalu `supabase/seed.sql` di SQL Editor (atau `supabase link` lalu `supabase db push` kalau memakai CLI).
+2. Jalankan `supabase/migrations/*.sql` lalu `supabase/seed.sql` di SQL Editor.
 3. Buat user di menu Authentication, lalu isi tabel `profiles` (contoh ada di `seed.sql`).
    - Kader (`role` kader): email `62<nomor HP tanpa 0>@kader.growsense.id` dan kata sandi minimal 8 karakter yang diberikan bidan ke kader, misalnya `6281234567890@kader.growsense.id`. Kata sandi ini berbeda dari PIN.
    - Bidan (`role` bidan) dan Pemdes atau Dinkes (`role` pemdes): email `<NIP>@staf.growsense.id`, atau email biasa. Di halaman masuk dashboard cukup ketik NIP.
