@@ -154,11 +154,13 @@ $$;
 
 -- Figures for Pemdes and Dinkes. Health counts of 1 or 2 are hidden, and every hidden value is
 -- hidden together with the values that could give it back by subtraction:
---   village_monthly: whole puskesmas per month. A count is hidden for all months of a calendar
---     quarter when any month of that quarter is small.
+--   village_monthly: whole puskesmas per month, completed quarters only. A count is hidden for
+--     all months of a calendar quarter when any month of that quarter is small.
 --   dusun_quarterly: per dusun for one completed calendar quarter, in child months. A count is
 --     hidden for every dusun when any dusun is small. Quarters do not overlap and no longer
 --     change, so two calls cannot be subtracted from each other.
+-- Nothing from the running quarter is shown: a month seen now could later be subtracted from the
+-- quarter total and give back a month that was hidden in the meantime.
 -- Same rules as villageMonthly and dusunQuarter in packages/core/src/stats.ts.
 create function public.pemdes_puskesmas() returns uuid
 language sql stable security definer set search_path = public as $$
@@ -268,6 +270,7 @@ language sql stable security definer set search_path = public as $$
     )), '[]')
     from marked
     where month between to_char(p_from, 'YYYY-MM') and to_char(p_to, 'YYYY-MM')
+      and month < to_char(date_trunc('quarter', current_date), 'YYYY-MM')
   ))
 $$;
 

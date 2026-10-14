@@ -195,10 +195,11 @@ export function lastCompletedQuarter(today: string): string {
 
 /**
  * Whole puskesmas per month, for Pemdes and Dinkes. `stats` must cover whole quarters around
- * `months`. With `suppress`, a health count is hidden for every month of a quarter when any
- * month of that quarter is 1 or 2. Same as village_monthly in the dashboard migration.
+ * `months`. With `suppress` (a YYYY-MM-DD today), a health count is hidden for every month of a
+ * quarter when any month of that quarter is 1 or 2, and months of the running quarter are left
+ * out. Same as village_monthly in the dashboard migration.
  */
-export function villageMonthly(stats: MonthlyStat[], months: string[], suppress = true): AreaStat[] {
+export function villageMonthly(stats: MonthlyStat[], months: string[], suppress: string | false): AreaStat[] {
   const byMonth = new Map<string, MonthlyStat[]>()
   for (const s of stats) byMonth.set(s.month, [...(byMonth.get(s.month) ?? []), s])
   const rows = [...byMonth].map(([month, list]) => toArea(sumStats(list, 'total', month), null, month))
@@ -208,7 +209,8 @@ export function villageMonthly(stats: MonthlyStat[], months: string[], suppress 
       for (const r of rows) if (smallQuarters.has(quarterOf(r.month))) hide(r, k)
     }
   }
-  return sortAreas(rows.filter((r) => months.includes(r.month)))
+  const running = suppress ? quarterOf(suppress.slice(0, 7)) : null
+  return sortAreas(rows.filter((r) => months.includes(r.month) && quarterOf(r.month) !== running))
 }
 
 /**

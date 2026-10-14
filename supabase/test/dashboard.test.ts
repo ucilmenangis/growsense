@@ -146,7 +146,8 @@ describe('village_monthly', () => {
       months.flatMap((m) => quarterMonths(`${m.slice(0, 4)}-Q${Math.floor((Number(m.slice(5)) - 1) / 3) + 1}`)),
     ),
   ]
-  const core = villageMonthly(allMonthly(wide), months)
+  const core = villageMonthly(allMonthly(wide), months, TODAY)
+  const running = quarterMonths(`${TODAY.slice(0, 4)}-Q${Math.floor((Number(TODAY.slice(5, 7)) - 1) / 3) + 1}`)
 
   it('gives pemdes the same figures as core', async () => {
     const sql = (
@@ -155,8 +156,8 @@ describe('village_monthly', () => {
       )
     ).rows
     expect(sql).toEqual(core)
-    expect(core).toHaveLength(12)
-    expect(core.every((r) => r.area === null)).toBe(true)
+    expect(core).toHaveLength(12 - running.filter((m) => months.includes(m)).length)
+    expect(core.every((r) => r.area === null && !running.includes(r.month))).toBe(true)
   })
 
   it('hides a count for the whole quarter or not at all', () => {
