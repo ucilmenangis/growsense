@@ -64,7 +64,7 @@ const GIRLS = [
   'Wulan',
   'Keisha',
 ]
-const LAST = [
+const LAST_BOY = [
   'Pratama',
   'Ramadhan',
   'Saputra',
@@ -72,11 +72,25 @@ const LAST = [
   'Hidayat',
   'Wijaya',
   'Kurniawan',
+  'Firmansyah',
+  'Setiawan',
+  'Nugroho',
+  'Hakim',
+  'Prasetyo',
+]
+const LAST_GIRL = [
   'Lestari',
   'Rahmawati',
   'Anggraini',
   'Safitri',
   'Permata',
+  'Putri',
+  'Maharani',
+  'Azzahra',
+  'Ramadhani',
+  'Kusuma',
+  'Aulia',
+  'Nuraini',
 ]
 const MOTHERS = [
   'Siti Fatimah',
@@ -168,7 +182,7 @@ export function demoDataset(today: string, seed = 7): DemoDataset {
       const child: ChildRow = {
         id: uuid('d2000000', ++childN),
         posyandu_id: pos.id,
-        full_name: `${r.pick(sex === 'male' ? BOYS : GIRLS)} ${r.pick(LAST)}`,
+        full_name: `${r.pick(sex === 'male' ? BOYS : GIRLS)} ${r.pick(sex === 'male' ? LAST_BOY : LAST_GIRL)}`,
         nik: r.next() < 0.75 ? `350900${String(r.int(0, 9_999_999_999)).padStart(10, '0')}` : null,
         sex,
         birth_date: birthDate,
@@ -235,20 +249,27 @@ export function demoDataset(today: string, seed = 7): DemoDataset {
         })
       }
 
-      // Some children with a long standing problem already have follow up notes from the bidan.
-      if ((pattern === 'pendek' || pattern === 'kurus') && r.next() < 0.6) {
-        const stages: FollowUpStage[] = ['rujukan', 'intervensi', 'kunjungan', 'evaluasi']
-        const reached = r.int(1, stages.length)
-        for (let s = 0; s < reached; s++) {
-          const doneAt = shiftMonths(today, -(reached - s) - 1)
+      // Children with a long standing problem already have follow up notes from the bidan, and
+      // most children who are catching up have a closed case.
+      const open = (pattern === 'pendek' || pattern === 'kurus') && r.next() < 0.6
+      const closed = pattern === 'pulih' && r.next() < 0.7
+      if (open || closed) {
+        const stages: FollowUpStage[] = closed
+          ? ['rujukan', 'intervensi', 'kunjungan', 'evaluasi', 'selesai']
+          : (['rujukan', 'intervensi', 'kunjungan', 'evaluasi'].slice(0, r.int(1, 4) as number) as FollowUpStage[])
+        // The latest note is 5 to 50 days old; its check is due 30 days later, so some are late.
+        const lastDone = isoDate(new Date(Date.parse(`${today}T00:00:00`) - r.int(5, 50) * 86_400_000))
+        for (const [s, stage] of stages.entries()) {
+          const latest = s === stages.length - 1
+          const doneAt = latest ? (closed ? today : lastDone) : shiftMonths(lastDone, -(stages.length - 1 - s))
           followUps.push({
             id: uuid('d4000000', ++followN),
             child_id: child.id,
-            stage: stages[s]!,
+            stage,
             done_at: doneAt,
-            next_at: s === reached - 1 ? shiftMonths(today, 1) : null,
-            actions: FOLLOW_UP_ACTIONS[stages[s]!].slice(0, 2),
-            note: FOLLOW_UP_NOTES[stages[s]!],
+            next_at: latest && !closed ? isoDate(new Date(Date.parse(`${doneAt}T00:00:00`) + 30 * 86_400_000)) : null,
+            actions: FOLLOW_UP_ACTIONS[stage].slice(0, 2),
+            note: FOLLOW_UP_NOTES[stage],
             deleted_at: null,
           })
         }
@@ -279,5 +300,5 @@ const FOLLOW_UP_NOTES: Record<FollowUpStage, string> = {
   intervensi: 'Mulai PMT lokal 90 hari, ibu sudah diberi edukasi MP-ASI.',
   kunjungan: 'Kunjungan rumah, sanitasi dan pola makan sudah dicek bersama kader.',
   evaluasi: 'Timbang ulang setelah 30 hari, dipantau bersama kader.',
-  selesai: 'Kasus ditutup.',
+  selesai: 'Tinggi badan kembali naik mengikuti kurva, kasus ditutup dan dipantau kader.',
 }

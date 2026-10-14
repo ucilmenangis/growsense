@@ -1,0 +1,43 @@
+@import 'tailwindcss';
+
+@import '@growsense/ui/theme.css';
+@source '../../../packages/ui/src';
+
+html,
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+@media print {
+  html,
+  body {
+    background: #fff;
+  }
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  section {
+    box-shadow: none !important;
+    border: 1px solid #dae2fd;
+  }
+  /* Tables scroll sideways on screen; on paper they shrink to the page instead. */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+  table {
+    min-width: 0 !important;
+  }
+  th,
+  td {
+    padding: 4px 6px !important;
+    font-size: 10px !important;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 14mm;
+}
