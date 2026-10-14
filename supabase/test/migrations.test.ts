@@ -1,18 +1,7 @@
-// Applies the migrations to PGlite with a minimal stand-in for Supabase auth, then checks RLS.
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { PGlite } from '@electric-sql/pglite'
+// Applies the migrations to PGlite, then checks RLS.
+import type { PGlite } from '@electric-sql/pglite'
 import { beforeAll, describe, expect, it } from 'vitest'
-
-const dir = join(import.meta.dirname, '..', 'migrations')
-
-const AUTH_STUB = `
-  create schema auth;
-  create table auth.users (id uuid primary key);
-  create function auth.uid() returns uuid language sql stable as
-    $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-  create role authenticated;
-`
+import { asUser, migratedDb } from './helpers'
 
 const ids = {
   pkm1: '10000000-0000-4000-8000-000000000001',
@@ -29,15 +18,7 @@ const ids = {
 
 let db: PGlite
 
-async function as<T>(user: string, run: () => Promise<T>): Promise<T> {
-  await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [user])
-  await db.exec('set role authenticated')
-  try {
-    return await run()
-  } finally {
-    await db.exec('reset role')
-  }
-}
+const as = <T>(user: string, run: () => Promise<T>) => asUser(db, user, run)
 
 const childNames = async () =>
   (await db.query<{ full_name: string }>('select full_name from children order by full_name')).rows.map(
@@ -45,16 +26,8 @@ const childNames = async () =>
   )
 
 beforeAll(async () => {
-  db = new PGlite()
-  await db.exec(AUTH_STUB)
-  for (const file of readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()) {
-    await db.exec(readFileSync(join(dir, file), 'utf8'))
-  }
+  db = await migratedDb()
   await db.exec(`
-    grant usage on schema public, auth to authenticated;
-    grant select, insert, update on all tables in schema public to authenticated;
     insert into auth.users values ('${ids.kaderA}'), ('${ids.bidan1}');
     insert into puskesmas (id, name) values ('${ids.pkm1}', 'P1'), ('${ids.pkm2}', 'P2');
     insert into posyandu (id, puskesmas_id, name) values

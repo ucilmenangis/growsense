@@ -67,8 +67,7 @@ export function monthlyStats(
         factors: emptyFactors(),
       }
       for (const c of kids) {
-        const age = ageInDays(c.birth_date, end)
-        if (age < 0 || age > MAX_AGE_DAYS) continue
+        if (c.birth_date > end || ageInDays(c.birth_date, end) > MAX_AGE_DAYS) continue
         stat.sasaran++
         const m = lastOfMonth.get(`${c.id}|${month}`)
         if (!m) continue

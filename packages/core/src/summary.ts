@@ -30,7 +30,7 @@ export function summarize<C extends ChildRow, M extends MeasurementRow>(
     byChild.set(m.child_id, list)
   }
   return children
-    .filter((c) => !c.deleted_at)
+    .filter((c) => !c.deleted_at && c.birth_date <= today)
     .map((child) => {
       const list = (byChild.get(child.id) ?? []).sort((a, b) => a.measured_at.localeCompare(b.measured_at))
       return {
@@ -42,7 +42,7 @@ export function summarize<C extends ChildRow, M extends MeasurementRow>(
         warning: earlyWarning(list),
       }
     })
-    .filter((s) => s.ageDays >= 0 && s.ageDays <= MAX_AGE_DAYS)
+    .filter((s) => s.ageDays <= MAX_AGE_DAYS)
     .sort((a, b) => a.child.full_name.localeCompare(b.child.full_name, 'id'))
 }
 
